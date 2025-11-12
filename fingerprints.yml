@@ -1,0 +1,7 @@
+# SmartThings fingerprints for Gree AC devices
+zigbeeManufacturer: Gree
+zigbeeModel: 
+  - "AC_LAN"
+  - "gree"
+deviceLabel: Gree Air Conditioner
+deviceProfileName: gree-ac
