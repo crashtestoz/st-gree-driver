@@ -202,8 +202,11 @@ function gree_protocol.bind_device(device_ip, device_mac)
 end
 
 -- Send command to device
-function gree_protocol.send_command(device_ip, device_mac, params, encryption_key)
+function gree_protocol.send_command(device_ip, device_mac, params, encryption_key, sub_unit_mac)
   log.info("Sending command to device: " .. device_mac)
+  if sub_unit_mac then
+    log.info("Sub-unit MAC: " .. sub_unit_mac)
+  end
   log.debug("Parameters: " .. json.encode(params))
   
   local udp = create_udp_socket()
@@ -225,6 +228,11 @@ function gree_protocol.send_command(device_ip, device_mac, params, encryption_ke
     p = dat,
     t = "cmd"
   }
+  
+  -- Add sub-unit MAC if provided (for multi-split systems)
+  if sub_unit_mac then
+    command.sub = sub_unit_mac
+  end
   
   local command_json = json.encode(command)
   log.debug("Command payload: " .. command_json)

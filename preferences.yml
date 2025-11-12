@@ -1,0 +1,69 @@
+---
+# Device preferences for Gree Air Conditioner Driver
+# These settings are configured per device in SmartThings
+
+preferences:
+  - name: deviceIp
+    title: "Device IP Address"
+    description: "IP address of the Gree WiFi module (e.g., 10.0.0.164)"
+    required: true
+    preferenceType: string
+    definition:
+      stringType: text
+      default: ""
+
+  - name: deviceMac
+    title: "Device MAC Address"
+    description: "MAC address of the main WiFi module (e.g., c039379a2dc9). Find this through device discovery."
+    required: true
+    preferenceType: string
+    definition:
+      stringType: text
+      default: ""
+
+  - name: encryptionKey
+    title: "Encryption Key"
+    description: "Device encryption key obtained during binding (e.g., 5Gh8Jk1Mn4Pq7St0). See CONFIG_TEMPLATE.md for how to obtain."
+    required: true
+    preferenceType: string
+    definition:
+      stringType: text
+      default: ""
+
+  - name: subUnitMac
+    title: "Sub-Unit MAC Address (Optional)"
+    description: "For multi-split systems, the MAC prefix of the specific AC unit (e.g., e137811d0000000 for Living room, 8f917e1d0000000 for Bedroom). Leave blank for single units."
+    required: false
+    preferenceType: string
+    definition:
+      stringType: text
+      default: ""
+
+  - name: pollingInterval
+    title: "Status Polling Interval"
+    description: "How often to check device status (in seconds). Lower values provide faster updates but increase network traffic."
+    required: false
+    preferenceType: integer
+    definition:
+      minimum: 10
+      maximum: 300
+      default: 30
+
+  - name: temperatureUnit
+    title: "Temperature Display Unit"
+    description: "Unit for displaying temperature (Gree devices always use Celsius internally)"
+    required: false
+    preferenceType: enumeration
+    definition:
+      options:
+        celsius: "Celsius (°C)"
+        fahrenheit: "Fahrenheit (°F)"
+      default: celsius
+
+  - name: debugLogging
+    title: "Enable Debug Logging"
+    description: "Enable detailed logging for troubleshooting. Disable for production use."
+    required: false
+    preferenceType: boolean
+    definition:
+      default: false

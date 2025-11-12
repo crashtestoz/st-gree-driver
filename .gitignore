@@ -3,15 +3,17 @@
 *.secret
 device_key.txt
 encryption_key.txt
+copilot-instructions.md
+CONFIG_TEMPLATE.md
 
-# Test files with personal data
+# Test files with real device credentials
 test_complete.lua
 test_status.lua
 test_direct.lua
 test_encrypted_bind.lua
-
-# Device-specific information
 TESTING.md
+
+# Generic test framework (test_protocol.lua) is safe to commit
 
 # Temporary files
 *.tmp
