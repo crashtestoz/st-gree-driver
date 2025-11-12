@@ -2,9 +2,25 @@
 -- UDP communication for Gree WiFi air conditioners
 -- Based on: https://github.com/bekmansurov/gree-hvac-protocol
 
-local socket = package.loaded["cosock.socket"] or require "socket"
-local json = require "dkjson"
-local log = package.loaded.log or require "log"
+-- SmartThings Edge uses cosock (coroutine socket wrapper)
+-- Fallback to regular socket for local testing
+local socket
+if package.loaded["cosock"] then
+  -- SmartThings Edge environment
+  local cosock = require "cosock"
+  socket = require "cosock.socket"
+  log = require "log"
+elseif package.loaded["cosock.socket"] then
+  socket = require "cosock.socket"
+  log = require "log"
+else
+  -- Local testing environment
+  socket = require "socket"
+  log = package.loaded.log or require "log"
+end
+
+-- JSON library (SmartThings Edge has st.json, fallback to dkjson)
+local json = package.loaded["st.json"] or require "dkjson"
 local crypto = require "crypto"
 
 local gree_protocol = {}
