@@ -1,0 +1,35 @@
+# Sensitive information - DO NOT COMMIT
+*.key
+*.secret
+device_key.txt
+encryption_key.txt
+
+# Test files with personal data
+test_complete.lua
+test_status.lua
+test_direct.lua
+test_encrypted_bind.lua
+
+# Device-specific information
+TESTING.md
+
+# Temporary files
+*.tmp
+/tmp/
+*.log
+
+# MacOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build artifacts
+*.tar.gz
+*.zip
+dist/
+build/
