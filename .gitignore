@@ -3,8 +3,9 @@
 *.secret
 device_key.txt
 encryption_key.txt
-copilot-instructions.md
-CONFIG_TEMPLATE.md
+
+# Internal AI coding instructions - not for public repo
+.github/copilot-instructions.md
 
 # Test files with real device credentials
 test_complete.lua

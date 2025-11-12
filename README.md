@@ -48,14 +48,17 @@ All device-specific information (IP addresses, MAC addresses, encryption keys) i
 ⚠️ **Important**: Never commit encryption keys, IP addresses, or MAC addresses to git. All sensitive data is configured via SmartThings device settings and excluded from version control.
 
 ## Development
-See `.github/copilot-instructions.md` for comprehensive development guidance and protocol details.
+See `IMPLEMENTATION_SUMMARY.md` for comprehensive development guidance and protocol details.
 
 ## Protocol Documentation
 Based on reverse-engineered Gree WiFi protocol:
 - AES-128-ECB encryption
 - UDP communication on port 7000
 - Multi-split system support
-- See references in `.github/copilot-instructions.md`
+- Protocol references:
+  - [Gree HVAC Protocol](https://github.com/tomikaa87/gree-remote)
+  - [Gree Protocol Reverse Engineering](https://github.com/bekmansurov/gree-hvac-protocol)
+  - [SmartThings LAN Edge Driver Guide](https://developer.smartthings.com/docs/devices/hub-connected/lan/)
 
 ## License
 [Your License Here]

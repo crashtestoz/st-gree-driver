@@ -17,7 +17,7 @@ The following sensitive data is **EXCLUDED** from git:
 - ✅ `.gitignore` - Protection rules
 - ✅ `CONFIG_TEMPLATE.md` - User configuration guide
 - ✅ `VERSION1.md` - Roadmap
-- ✅ `.github/copilot-instructions.md` - Development guide
+- ✅ `IMPLEMENTATION_SUMMARY.md` - Development guide
 - ✅ `README.md` - Project overview
 
 ## Verification

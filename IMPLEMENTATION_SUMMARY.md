@@ -58,30 +58,23 @@
 
 ### Documentation Files
 
-8. **`.github/copilot-instructions.md`** (AI Coding Guide)
-   - Comprehensive protocol documentation
-   - Multi-split system handling
-   - Security best practices
-   - External reference links
-   - Common pitfalls and solutions
-
-9. **`CONFIG_TEMPLATE.md`** (User Configuration Guide)
+8. **`CONFIG_TEMPLATE.md`** (User Configuration Guide)
    - Step-by-step setup instructions
    - Three methods to obtain encryption keys
    - Multi-split configuration examples
    - Troubleshooting tips
 
-10. **`VERSION1.md`** (Version Roadmap)
-    - V1 scope definition
-    - Implementation checklist
-    - Future version plans
+9. **`VERSION1.md`** (Version Roadmap)
+   - V1 scope definition
+   - Implementation checklist
+   - Future version plans
 
-11. **`SECURITY.md`** (Security Guidelines)
+10. **`SECURITY.md`** (Security Guidelines)
     - Data protection checklist
     - Git ignore rules
     - Best practices
 
-12. **`README.md`** (Project Overview)
+11. **`README.md`** (Project Overview)
     - Installation instructions
     - Feature list
     - Quick start guide
@@ -89,13 +82,13 @@
 
 ### Build & Deploy
 
-13. **`package.sh`** (Build Script)
+12. **`package.sh`** (Build Script)
     - Automated packaging for SmartThings
     - File validation
     - Version management
     - Deployment instructions
 
-14. **`.gitignore`** (Security Protection)
+13. **`.gitignore`** (Security Protection)
     - Excludes test files with real credentials
     - Protects sensitive configuration
     - Prevents accidental data leaks
