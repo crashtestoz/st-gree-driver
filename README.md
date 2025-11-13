@@ -10,7 +10,7 @@ A Samsung SmartThings Edge driver for Gree air conditioners using the ME31-00/C7
 - **Version 1.0**: Basic ON/OFF control with Mode and Temperature display
 
 ## Supported Devices
-- Gree air conditioners with ME31-00/C7 WiFi module
+- Gree / Sealy International / Breamar air conditioners with ME31-00/C7 WiFi module
 - Single and multi-split systems
 - Tested with various Gree models
 
