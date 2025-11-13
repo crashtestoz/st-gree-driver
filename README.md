@@ -38,6 +38,10 @@ For **multi-split systems** (multiple indoor units), each sub-unit requires manu
 2. Go to device details for each indoor unit
 3. Find MAC address in device info (format: `a1b2c3d4000000`)
 
+![Gree+ App - Finding Sub-Unit MAC](img/gree_plus_app.jpeg)
+
+*The sub-unit MAC address is shown in the device information screen*
+
 **Method 2: From Router DHCP**
 1. Access your router's admin page
 2. Look for devices named "gree" or similar
