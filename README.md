@@ -38,7 +38,7 @@ For **multi-split systems** (multiple indoor units), each sub-unit requires manu
 2. Go to device details for each indoor unit
 3. Find MAC address in device info (format: `a1b2c3d4000000`)
 
-![Gree+ App - Finding Sub-Unit MAC](img/gree_plus_app.jpeg)
+<img src="img/gree_plus_app.jpeg" alt="Gree+ App - Finding Sub-Unit MAC" width="50%">
 
 *The sub-unit MAC address is shown in the device information screen*
 
@@ -82,9 +82,6 @@ Most settings are **auto-configured**:
 - Mode selection
 - Fan speed control
 - Advanced features (Quiet mode, Turbo, Swing control)
-
-## Security
-⚠️ **Important**: Never commit encryption keys, IP addresses, or MAC addresses to git. All sensitive data is configured via SmartThings device settings and excluded from version control.
 
 ## Development
 See `IMPLEMENTATION_SUMMARY.md` for comprehensive development guidance and protocol details.
