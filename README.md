@@ -17,7 +17,7 @@ A Samsung SmartThings Edge driver for Gree air conditioners using the ME31-00/C7
 ## Installation
 
 ### Via SmartThings App (Recommended)
-1. Enroll in driver channel: [Channel Invitation Link]
+1. Enroll in driver channel: [Subscribe to Channel](https://bestow-regional.api.smartthings.com/invite/df22a774-b90d-4b36-b57f-a78348a3695c)
 2. In SmartThings app: **Devices** → **+** → **Scan nearby**
 3. Driver will auto-discover Gree AC units
 4. For multi-split systems, configure sub-unit MAC (see below)
