@@ -100,7 +100,18 @@ Based on reverse-engineered Gree WiFi protocol:
   - [SmartThings LAN Edge Driver Guide](https://developer.smartthings.com/docs/devices/hub-connected/lan/)
 
 ## License
-[Your License Here]
+
+This work is licensed under a [Creative Commons Attribution-NonCommercial 4.0 International License](https://creativecommons.org/licenses/by-nc/4.0/).
+
+[![CC BY-NC 4.0](https://licensebuttons.net/l/by-nc/4.0/88x31.png)](https://creativecommons.org/licenses/by-nc/4.0/)
+
+**You are free to:**
+- **Share** — copy and redistribute the material in any medium or format
+- **Adapt** — remix, transform, and build upon the material
+
+**Under the following terms:**
+- **Attribution** — You must give appropriate credit, provide a link to the license, and indicate if changes were made.
+- **NonCommercial** — You may not use the material for commercial purposes.
 
 ## Contributing
 Contributions welcome! Please ensure no sensitive data (keys, IPs, MACs) is included in pull requests.
