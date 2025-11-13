@@ -1,0 +1,7 @@
+name: 'Gree AC Driver V1.0.29'
+packageKey: 'gree.v1.0.29'
+permissions:
+  lan: {}
+  discovery: {}
+lan_discovery:
+  auto: true

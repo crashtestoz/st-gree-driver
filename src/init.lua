@@ -1,6 +1,9 @@
--- SmartThings Gree Air Conditioner Driver - Version 1.0
+-- SmartThings Gree Air Conditioner Driver - Version 1.0.29
 -- Copyright (c) 2025
--- Features: ON/OFF control, Mode display (read-only), Temperature display (read-only)
+-- Features: ON/OFF control, Mode display (read-only), Cooling setpoint display (read-only)
+-- Multi-split support with smart refresh (command-based status queries)
+-- Auto-configuration: IP, MAC, and encryption key auto-detected
+-- Manual configuration: Sub-unit MAC (for multi-split systems)
 
 local Driver = require "st.driver"
 local capabilities = require "st.capabilities"
@@ -12,8 +15,10 @@ local device_handler = require "device_handler"
 
 -- Driver initialization
 local function driver_init(driver)
-  log.info("Gree Air Conditioner Driver initialized - Version 1.0")
-  log.info("Features: ON/OFF control, Mode display, Temperature display")
+  log.info("Starting Gree AC driver - Version 1.0.29 - Auto-config (IP, MAC, encryption key)")
+  log.info("Features: ON/OFF control, Mode display, Cooling setpoint display, Manual refresh")
+  log.info("Multi-split: Auto-creates sub-unit devices, requires sub_mac configuration in settings")
+  log.info("See README for multi-split configuration instructions")
 end
 
 -- Driver configuration
@@ -43,5 +48,5 @@ local driver_config = {
 
 -- Create and run the driver
 local driver = Driver("gree-ac-driver", driver_config)
-log.info("Starting Gree AC driver - Version 1.0")
+  log.info("Starting Gree AC driver - Auto-create sub-unit devices")
 driver:run()

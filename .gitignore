@@ -8,11 +8,10 @@ encryption_key.txt
 .github/copilot-instructions.md
 
 # Test files with real device credentials
-test_complete.lua
-test_status.lua
-test_direct.lua
-test_encrypted_bind.lua
-TESTING.md
+scripts/
+
+# Documentation (may contain development notes)
+docs/
 
 # Generic test framework (test_protocol.lua) is safe to commit
 

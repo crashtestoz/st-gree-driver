@@ -27,7 +27,7 @@ required_files=(
   "src/device_handler.lua"
   "src/crypto.lua"
   "profiles/gree-ac.yml"
-  "config/config.yml"
+  "config.yml"
 )
 
 for file in "${required_files[@]}"; do
@@ -44,7 +44,7 @@ echo "Creating package..."
 tar -czf "$PACKAGE_FILE" \
   src/ \
   profiles/ \
-  config/ \
+  config.yml \
   README.md \
   CONFIG_TEMPLATE.md \
   VERSION1.md

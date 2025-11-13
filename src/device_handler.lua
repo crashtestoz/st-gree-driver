@@ -30,11 +30,53 @@ local REVERSE_MODE_MAP = {
 
 -- Helper: Get device preferences
 local function get_device_config(device)
+  -- Priority: 1) Discovered data (auto-configured), 2) User preferences (manual override)
+  local function get_value(discovered_name, pref_name)
+    -- First check discovered value from auto-configuration
+    local discovered_val = discovered_name and device:get_field(discovered_name)
+    if discovered_val and discovered_val ~= "" then
+      log.debug("Using discovered value for " .. pref_name .. ": " .. tostring(discovered_val))
+      return discovered_val
+    end
+    
+    -- Then check user preference (manual override)
+    local pref_val = device.preferences[pref_name]
+    if pref_val and pref_val ~= "" and pref_val ~= nil then
+      log.debug("Using preference value for " .. pref_name .. ": " .. tostring(pref_val))
+      return pref_val
+    end
+    
+    log.debug("No value found for " .. pref_name)
+    return nil
+  end
+  
+  -- Get sub_mac from preferences (manual configuration required for multi-split)
+  local sub_mac = get_value("subUnitMac")
+  
+  if not sub_mac or sub_mac == "" then
+    local is_sub_unit = device:get_field("is_sub_unit")
+    if is_sub_unit then
+      log.warn("Multi-split sub-unit missing sub_mac configuration - configure in device settings")
+    end
+  end
+  
+  -- Get encryption key - priority: 1) From bind (stored field), 2) User preference, 3) Generic key
+  local key = device:get_field("encryption_key") -- From successful bind
+  if key and key ~= "" then
+    log.debug("Using encryption key from bind: " .. key)
+  else
+    key = get_value(nil, "encryptionKey") -- From user preference
+    if not key or key == "" then
+      log.debug("No encryption key configured, using generic key")
+      key = gree_protocol.GENERIC_KEY
+    end
+  end
+  
   return {
-    ip = device.preferences.deviceIp or device:get_field("device_ip"),
-    mac = device.preferences.deviceMac or device:get_field("device_mac"),
-    key = device.preferences.encryptionKey or device:get_field("encryption_key"),
-    sub_mac = device.preferences.subUnitMac or device:get_field("sub_unit_mac")
+    ip = get_value("discovered_ip", "deviceIp"),
+    mac = get_value("discovered_mac", "deviceMac"),
+    key = key,
+    sub_mac = sub_mac
   }
 end
 
@@ -52,14 +94,48 @@ end
 -- Initialize device on addition
 function device_handler.device_added(driver, device)
   log.info("Device added: " .. device.label)
+  log.debug("Device network ID: " .. tostring(device.device_network_id))
   
-  -- Set initial values
+  -- Check if this device was just discovered and has cached info
+  discovered_devices_cache = discovered_devices_cache or {}
+  
+  -- Debug: Log cache contents
+  log.debug("Discovery cache has " .. tostring(#discovered_devices_cache) .. " entries")
+  for key, _ in pairs(discovered_devices_cache) do
+    log.debug("  Cache key: " .. tostring(key))
+  end
+  
+  local cached_info = discovered_devices_cache[device.device_network_id]
+  
+  if cached_info then
+    log.info("Auto-configuring from discovery: IP=" .. cached_info.ip .. ", MAC=" .. cached_info.mac)
+    
+    -- Save discovered info to device fields (these will be used by get_device_config)
+    device:set_field("discovered_ip", cached_info.ip, {persist = true})
+    device:set_field("discovered_mac", cached_info.mac, {persist = true})
+    
+    if cached_info.sub_index then
+      log.info("Sub-unit " .. cached_info.sub_index .. " of " .. cached_info.subCnt)
+      device:set_field("discovered_sub_index", cached_info.sub_index, {persist = true})
+      device:set_field("is_sub_unit", true, {persist = true})
+      
+      -- Store sub_mac if available from discovery
+      if cached_info.sub_mac then
+        log.info("Auto-detected sub-unit MAC: " .. cached_info.sub_mac)
+        device:set_field("discovered_sub_mac", cached_info.sub_mac, {persist = true})
+      end
+    end
+    
+    -- Note: Don't clear cache here - multiple devices may share the same discovery info
+    -- Cache will be cleared when discovery runs again
+  end
+  
+  -- Set initial values (only capabilities we can reliably update)
   device:emit_event(capabilities.switch.switch.off())
   device:emit_event(capabilities.thermostatMode.thermostatMode.auto())
   device:emit_event(capabilities.thermostatCoolingSetpoint.coolingSetpoint({value = 24, unit = "C"}))
-  device:emit_event(capabilities.temperatureMeasurement.temperature({value = 22, unit = "C"}))
   
-  -- Start polling
+  -- Start polling with empty p[] array to avoid changing AC state
   device.thread:call_on_schedule(
     device.preferences.pollingInterval or 30,
     function()
@@ -99,20 +175,66 @@ function device_handler.device_removed(driver, device)
   device_states[device.id] = nil
 end
 
+-- Attempt to bind device (or rebind if failing)
+local function attempt_bind(device, config)
+  if not config.ip or not config.mac then
+    log.error("Cannot bind: missing IP or MAC")
+    return false
+  end
+  
+  log.info("Attempting to bind with device at " .. config.ip)
+  local key, err = gree_protocol.bind_device(config.ip, config.mac)
+  
+  if key then
+    log.info("✓ Bind successful! Encryption key: " .. key)
+    device:set_field("encryption_key", key, {persist = true})
+    log.info("Encryption key stored and will be used for all commands")
+    return true
+  else
+    log.error("✗ Bind failed: " .. tostring(err))
+    return false
+  end
+end
+
 -- Poll device status
 function device_handler.poll_device(driver, device)
   local config = get_device_config(device)
   
-  if not config.ip or not config.mac or not config.key then
-    log.warn("Device not fully configured, skipping poll")
+  if not config.ip or not config.mac then
+    log.warn("Device missing IP or MAC, cannot poll")
     return
+  end
+  
+  -- If no encryption key, attempt to bind first
+  if not config.key or config.key == "" then
+    log.info("No encryption key found, attempting bind...")
+    if attempt_bind(device, config) then
+      -- Refresh config after binding
+      config = get_device_config(device)
+    else
+      log.error("Cannot poll without encryption key")
+      return
+    end
   end
   
   log.debug("Polling device status...")
   
-  -- Query status
-  local params_to_query = {"Pow", "Mod", "SetTem", "WdSpd", "TemUn", "TemSen"}
-  local status, err = gree_protocol.query_status(config.ip, config.mac, config.key, params_to_query)
+  local status, err
+  local is_sub_unit = device:get_field("is_sub_unit") or false
+  
+  -- For sub-unit devices, use smart refresh (command-based query)
+  -- Status queries don't work for sub-units, but commands return actual state in val array
+  if is_sub_unit or (config.sub_mac and config.sub_mac ~= "") then
+    log.debug("Using smart refresh for sub-unit device")
+    -- Use sub_mac if configured, otherwise nil (will likely timeout for multi-split)
+    local sub_id = config.sub_mac and config.sub_mac ~= "" and config.sub_mac or nil
+    status, err = gree_protocol.refresh_status(config.ip, config.mac, config.key, sub_id)
+  else
+    -- Query status for main unit (traditional status query works here)
+    log.debug("Using traditional status query for main unit")
+    local params_to_query = {"Pow", "Mod", "SetTem", "WdSpd", "TemUn", "TemSen"}
+    status, err = gree_protocol.query_status(config.ip, config.mac, config.key, params_to_query, nil)
+  end
   
   if not status then
     log.error("Failed to query status: " .. tostring(err))
@@ -176,12 +298,10 @@ function device_handler.switch_on(driver, device, command)
     return
   end
   
-  -- Build command
+  -- Build command - only send Pow parameter
+  -- Some AC models reject commands with multiple parameters during power changes
   local params = {
-    Pow = 1,
-    Mod = 1,  -- Default to Cool mode
-    SetTem = 24,  -- Default to 24°C
-    TemUn = 0  -- Celsius
+    Pow = 1
   }
   
   -- Send command
@@ -190,11 +310,8 @@ function device_handler.switch_on(driver, device, command)
   if result then
     device:emit_event(capabilities.switch.switch.on())
     log.info("Device turned ON")
-    
-    -- Poll immediately to update status
-    device.thread:call_with_delay(1, function()
-      device_handler.poll_device(driver, device)
-    end)
+    -- Note: For multi-split systems, don't poll status after commands
+    -- The command response is the authoritative state
   else
     log.error("Failed to turn ON: " .. tostring(err))
   end
@@ -211,7 +328,8 @@ function device_handler.switch_off(driver, device, command)
     return
   end
   
-  -- Build command
+  -- Build command - only send Pow parameter
+  -- Some AC models reject commands with multiple parameters during power changes
   local params = {
     Pow = 0
   }
@@ -222,11 +340,8 @@ function device_handler.switch_off(driver, device, command)
   if result then
     device:emit_event(capabilities.switch.switch.off())
     log.info("Device turned OFF")
-    
-    -- Poll immediately to update status
-    device.thread:call_with_delay(1, function()
-      device_handler.poll_device(driver, device)
-    end)
+    -- Note: For multi-split systems, don't poll status after commands
+    -- The command response is the authoritative state
   else
     log.error("Failed to turn OFF: " .. tostring(err))
   end
@@ -242,6 +357,9 @@ end
 function device_handler.discovery_handler(driver, opts, cont)
   log.info("Starting device discovery...")
   
+  -- Clear any stale cached discovery info from previous scans
+  discovered_devices_cache = {}
+  
   -- Discover Gree devices on the network
   local devices = gree_protocol.discover_devices()
   
@@ -254,6 +372,8 @@ function device_handler.discovery_handler(driver, opts, cont)
   
   -- Create metadata for each discovered device
   for _, device_info in ipairs(devices) do
+    -- Store discovered info - will be set as device fields in device_added handler
+    -- We'll use device_network_id to encode the discovered info temporarily
     local metadata = {
       type = "LAN",
       device_network_id = device_info.mac,
@@ -264,15 +384,50 @@ function device_handler.discovery_handler(driver, opts, cont)
       vendor_provided_label = device_info.name or "Gree Air Conditioner"
     }
     
-    -- Add discovered device to SmartThings
-    driver:try_create_device(metadata)
-    log.info("Created device: " .. metadata.label .. " at " .. device_info.ip)
+    -- Store discovered info globally so device_added can access it
+    discovered_devices_cache = discovered_devices_cache or {}
+    discovered_devices_cache[device_info.mac] = device_info
     
     -- If this is a multi-split system, create separate devices for each sub-unit
-    if device_info.subCnt and device_info.subCnt > 1 then
+    if device_info.subCnt and device_info.subCnt > 0 then
       log.info("Multi-split system detected with " .. device_info.subCnt .. " sub-units")
-      -- Note: Sub-unit discovery would require additional protocol calls
-      -- For Version 1, users must manually configure sub-unit MACs in preferences
+      log.info("Main unit MAC: " .. device_info.mac .. " at " .. device_info.ip)
+      
+      -- Note: Auto-detection of sub-unit MACs requires the encryption key
+      -- For now, sub_mac will need to be configured via preferences or stored from previous configuration
+      -- The generic key should work for already-bound devices, but we still need the specific sub_mac values
+      log.info("Sub-unit MACs must be configured in device settings")
+      log.info("Check device settings or use Gree+ app to identify sub-unit addresses")
+      
+      for i = 1, device_info.subCnt do
+        local sub_network_id = device_info.mac .. "_sub" .. i
+        local sub_metadata = {
+          type = "LAN",
+          device_network_id = sub_network_id,
+          label = "Gree AC Unit " .. i .. " (" .. device_info.mac:sub(-4) .. ")",
+          profile = "gree-ac",
+          manufacturer = "Gree",
+          model = device_info.name or "Air Conditioner (Sub-unit)",
+          vendor_provided_label = "Gree Air Conditioner Sub-unit " .. i
+        }
+        
+        -- Store sub-unit info for device_added
+        discovered_devices_cache[sub_network_id] = {
+          ip = device_info.ip,
+          mac = device_info.mac,
+          name = device_info.name,
+          sub_index = i,
+          subCnt = device_info.subCnt,
+          sub_mac = nil  -- Must be configured manually in device settings
+        }
+        
+        driver:try_create_device(sub_metadata)
+        log.info("Created sub-unit device " .. i .. ": " .. sub_metadata.label)
+      end
+    else
+      -- Single unit system - create normal device
+      driver:try_create_device(metadata)
+      log.info("Created device: " .. metadata.label .. " at " .. device_info.ip)
     end
   end
 end

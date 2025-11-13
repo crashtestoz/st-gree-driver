@@ -39,77 +39,86 @@ local crypto = {}
 -- Generic AES key (used before binding)
 crypto.GENERIC_KEY = "a3K8Bx%2r8Y7#xDh"
 
--- AES ECB encryption using OpenSSL
+-- Use pure Lua AES-128-ECB implementation (st.security doesn't support AES-128)
+local aes128 = require "aes128"
+
+-- AES ECB encryption using pure Lua implementation
 -- Note: Gree uses AES-128-ECB with PKCS7 padding
 local function aes_encrypt(data, key)
+  log.debug("Encrypting with pure Lua AES-128-ECB, data length: " .. #data)
+  
+  if #key ~= 16 then
+    log.error("AES-128 requires 16-byte key, got " .. #key)
+    return nil
+  end
+  
   -- Pad data to 16-byte blocks (PKCS7 padding)
   local padding = 16 - (#data % 16)
   local padded_data = data .. string.rep(string.char(padding), padding)
   
-  -- Use openssl for encryption via command line (temporary approach)
-  -- TODO: Replace with pure Lua AES implementation or SmartThings crypto library
-  local temp_in = os.tmpname()
-  local temp_out = os.tmpname()
-  local temp_key = os.tmpname()
+  log.debug("After padding, length: " .. #padded_data)
   
-  local f = io.open(temp_in, "wb")
-  f:write(padded_data)
-  f:close()
+  -- Encrypt using pure Lua AES-128
+  local success, encrypted = pcall(aes128.encrypt_ecb, padded_data, key)
   
-  f = io.open(temp_key, "w")
-  f:write(key)
-  f:close()
+  if not success then
+    log.error("AES encryption failed: " .. tostring(encrypted))
+    return nil
+  end
   
-  -- Run openssl encryption
-  local cmd = string.format(
-    "openssl enc -aes-128-ecb -in %s -out %s -K $(echo -n '%s' | xxd -p) -nopad",
-    temp_in, temp_out, key
-  )
-  os.execute(cmd)
-  
-  -- Read encrypted result
-  f = io.open(temp_out, "rb")
-  local encrypted = f:read("*all")
-  f:close()
-  
-  -- Cleanup
-  os.remove(temp_in)
-  os.remove(temp_out)
-  os.remove(temp_key)
+  log.debug("Encryption successful, result length: " .. #encrypted)
   
   return encrypted
 end
 
--- AES ECB decryption using OpenSSL
+-- AES ECB decryption using pure Lua implementation
+-- Gree protocol: AES-128-ECB with PKCS7 padding, then Base64 encoding
 local function aes_decrypt(data, key)
-  local temp_in = os.tmpname()
-  local temp_out = os.tmpname()
+  log.debug("Decrypting with pure Lua AES-128-ECB")
+  log.debug("Data length: " .. #data .. ", Key length: " .. #key)
   
-  local f = io.open(temp_in, "wb")
-  f:write(data)
-  f:close()
-  
-  -- Run openssl decryption
-  local cmd = string.format(
-    "openssl enc -aes-128-ecb -d -in %s -out %s -K $(echo -n '%s' | xxd -p) -nopad",
-    temp_in, temp_out, key
-  )
-  os.execute(cmd)
-  
-  -- Read decrypted result
-  f = io.open(temp_out, "rb")
-  local decrypted = f:read("*all")
-  f:close()
-  
-  -- Remove PKCS7 padding
-  local padding = string.byte(decrypted, -1)
-  if padding and padding > 0 and padding <= 16 then
-    decrypted = decrypted:sub(1, -padding - 1)
+  if #key ~= 16 then
+    log.error("AES-128 requires 16-byte key, got " .. #key)
+    return nil
   end
   
-  -- Cleanup
-  os.remove(temp_in)
-  os.remove(temp_out)
+  if #data % 16 ~= 0 then
+    log.error("Encrypted data length must be multiple of 16, got " .. #data)
+    return nil
+  end
+  
+  -- Decrypt using pure Lua AES-128
+  local success, decrypted = pcall(aes128.decrypt_ecb, data, key)
+  
+  if not success then
+    log.error("AES decryption failed: " .. tostring(decrypted))
+    return nil
+  end
+  
+  log.debug("Decryption successful, result length: " .. #decrypted)
+  
+  -- Remove PKCS7 padding
+  if #decrypted > 0 then
+    local padding = decrypted:byte(-1)
+    log.debug("PKCS7 padding value: " .. padding)
+    if padding and padding > 0 and padding <= 16 then
+      -- Verify padding is valid (all padding bytes should be same)
+      local valid = true
+      for i = 1, padding do
+        if decrypted:byte(-i) ~= padding then
+          valid = false
+          break
+        end
+      end
+      
+      if valid then
+        decrypted = decrypted:sub(1, -padding - 1)
+        log.debug("After removing padding, length: " .. #decrypted)
+      else
+        log.warn("Invalid PKCS7 padding detected, not removing")
+      end
+    end
+  end
   
   return decrypted
 end
@@ -135,9 +144,17 @@ function crypto.decrypt(encrypted_text, key)
   log.debug("Decrypting message with key: " .. key)
   
   local decoded = base64.decode(encrypted_text)
+  log.debug("Base64 decoded length: " .. #decoded)
+  
   local decrypted = aes_decrypt(decoded, key)
   
-  log.debug("Decrypted result: " .. decrypted)
+  if decrypted then
+    log.debug("Decrypted result length: " .. #decrypted)
+    log.trace("Decrypted result: " .. decrypted)
+  else
+    log.error("Decryption returned nil")
+    return nil
+  end
   
   return decrypted
 end

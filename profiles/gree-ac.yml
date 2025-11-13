@@ -2,15 +2,11 @@ name: gree-ac
 components:
 - id: main
   capabilities:
+  - id: switch
+    version: 1
   - id: thermostatCoolingSetpoint
     version: 1
   - id: thermostatMode
-    version: 1
-  - id: temperatureMeasurement
-    version: 1
-  - id: fanSpeed
-    version: 1
-  - id: switch
     version: 1
   - id: refresh
     version: 1
@@ -19,31 +15,31 @@ components:
 preferences:
   - name: deviceIp
     title: "Device IP Address"
-    description: "IP address of the Gree WiFi module (e.g., 10.0.0.164)"
-    required: true
+    description: "Auto-configured from discovery. Only change if device IP changes (e.g., 192.168.1.100)"
+    required: false
     preferenceType: string
     definition:
       stringType: text
       default: ""
   - name: deviceMac
     title: "Device MAC Address"
-    description: "MAC address of the main WiFi module (e.g., c039379a2dc9). Find this through device discovery."
-    required: true
+    description: "Auto-configured from discovery. Only change for manual setup (e.g., a1b2c3d4e5f6)"
+    required: false
     preferenceType: string
     definition:
       stringType: text
       default: ""
   - name: encryptionKey
     title: "Encryption Key"
-    description: "Device encryption key obtained during binding (e.g., 5Gh8Jk1Mn4Pq7St0). See CONFIG_TEMPLATE.md for how to obtain."
-    required: true
+    description: "Auto-obtained during binding. Leave blank for automatic binding. Manual entry only needed for pre-bound devices."
+    required: false
     preferenceType: string
     definition:
       stringType: text
       default: ""
   - name: subUnitMac
-    title: "Sub-Unit MAC Address (Optional)"
-    description: "For multi-split systems, the MAC prefix of the specific AC unit (e.g., e137811d0000000 for Living room, 8f917e1d0000000 for Bedroom). Leave blank for single units."
+    title: "Sub-Unit MAC (Multi-split)"
+    description: "REQUIRED for multi-split systems. Enter sub-unit MAC address (e.g., a1b2c3d4000000). See README for instructions."
     required: false
     preferenceType: string
     definition:

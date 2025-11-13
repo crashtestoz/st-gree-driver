@@ -4,7 +4,8 @@ A Samsung SmartThings Edge driver for Gree air conditioners using the ME31-00/C7
 
 ## Features
 - **Local control** without cloud dependencies
-- **Auto-discovery** of Gree AC units on local network
+- **Auto-discovery** of Gree AC units on local network  
+- **Auto-configuration** - IP, MAC, and encryption key detected automatically
 - **Multi-split support** - Control multiple AC units independently
 - **Version 1.0**: Basic ON/OFF control with Mode and Temperature display
 
@@ -15,22 +16,56 @@ A Samsung SmartThings Edge driver for Gree air conditioners using the ME31-00/C7
 
 ## Installation
 
-### Prerequisites
-- Samsung SmartThings Hub (with Edge driver support)
-- Gree AC with WiFi module on same local network
-- SmartThings CLI (for driver installation)
+### Via SmartThings App (Recommended)
+1. Enroll in driver channel: [Channel Invitation Link]
+2. In SmartThings app: **Devices** → **+** → **Scan nearby**
+3. Driver will auto-discover Gree AC units
+4. For multi-split systems, configure sub-unit MAC (see below)
 
-### Steps
-1. Package the driver:
-   ```bash
-   tar -czf gree-driver.tar.gz src/ profiles/ config/ fingerprints.yml
-   ```
-2. Install via SmartThings CLI or Developer Workspace
-3. Add device in SmartThings app
-4. Configure device settings (see `CONFIG_TEMPLATE.md`)
+### Manual Installation (Developers)
+1. Clone repository
+2. Package driver: `smartthings edge:drivers:package .`
+3. Install via SmartThings CLI
+
+## Multi-Split Configuration
+
+For **multi-split systems** (multiple indoor units), each sub-unit requires manual configuration:
+
+### Finding Sub-Unit MAC Addresses
+
+**Method 1: From Gree+ App**
+1. Open Gree+ app
+2. Go to device details for each indoor unit
+3. Find MAC address in device info (format: `a1b2c3d4000000`)
+
+**Method 2: From Router DHCP**
+1. Access your router's admin page
+2. Look for devices named "gree" or similar
+3. Note MAC addresses for each indoor unit
+
+**Method 3: From Driver Logs** (requires SmartThings CLI)
+1. Run: `smartthings edge:drivers:logcat <driver-id> --hub-address <hub-ip>`
+2. Trigger a refresh on the device
+3. Look for MAC addresses in response packets
+
+### Setting Sub-Unit MAC
+1. In SmartThings app, open device settings
+2. Find **"Sub-Unit MAC (Multi-split)"** setting
+3. Enter the MAC address for that specific indoor unit (e.g., `a1b2c3d4000000`)
+4. Save settings
+
+**Important**: Each sub-unit device needs its own unique sub-unit MAC configured.
 
 ## Configuration
-All device-specific information (IP addresses, MAC addresses, encryption keys) is configured through SmartThings device settings. See `CONFIG_TEMPLATE.md` for detailed configuration guide.
+Most settings are **auto-configured**:
+- ✅ **IP Address**: Detected during discovery
+- ✅ **MAC Address**: Detected during discovery  
+- ✅ **Encryption Key**: Retrieved automatically via binding
+
+**Manual configuration only needed for**:
+- Sub-unit MAC addresses (multi-split systems)
+- Adjusting polling interval (optional)
+- Temperature display units (optional)
 
 ## Version 1.0 Features
 - ✅ Power ON/OFF control
