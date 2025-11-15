@@ -3,6 +3,7 @@
 *.secret
 device_key.txt
 encryption_key.txt
+channel_update.yml
 
 # Internal AI coding instructions - not for public repo
 .github/copilot-instructions.md

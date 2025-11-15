@@ -110,28 +110,43 @@ function gree_protocol.discover_devices()
   
   log.debug("Sending discovery broadcast: " .. msg_json)
   
-  -- Try broadcast first, then fallback to specific IP if known
-  local broadcast_addresses = {"255.255.255.255", "10.0.0.255"}
-  local sent = false
+  -- Try broadcast first
+  local broadcast_addresses = {"255.255.255.255"}
   
   for _, addr in ipairs(broadcast_addresses) do
     local ok, err = udp:sendto(msg_json, addr, gree_protocol.BROADCAST_PORT)
     if ok then
-      log.debug("Sent to " .. addr)
-      sent = true
+      log.debug("Sent broadcast to " .. addr)
     else
       log.debug("Failed to send to " .. addr .. ": " .. tostring(err))
     end
   end
   
-  if not sent then
-    log.error("Failed to send discovery broadcast to any address")
-    udp:close()
-    return {}
+  -- Get hub's local IP to determine subnet
+  local hub_ip, port = udp:getsockname()
+  if hub_ip and hub_ip ~= "0.0.0.0" then
+    log.info("Hub IP: " .. hub_ip .. ", scanning same subnet...")
+    
+    -- Extract subnet (assuming /24 network)
+    local base_ip = hub_ip:match("(%d+%.%d+%.%d+%.)%d+")
+    if base_ip then
+      log.info("Scanning subnet " .. base_ip .. "0/24 for Gree devices...")
+      
+      -- Scan entire subnet (some devices don't respond to broadcasts when bound)
+      for i = 1, 254 do
+        local ip = base_ip .. i
+        udp:sendto(msg_json, ip, gree_protocol.BROADCAST_PORT)
+      end
+      
+      log.debug("Direct scan sent to " .. base_ip .. "1-254")
+    end
+  else
+    log.warn("Could not determine hub IP, skipping subnet scan")
   end
   
-  -- Collect responses
+  -- Collect responses (deduplicated by MAC address)
   local discovered_devices = {}
+  local seen_macs = {}
   local start_time = socket.gettime()
   
   while socket.gettime() - start_time < gree_protocol.DISCOVERY_TIMEOUT do
@@ -154,29 +169,37 @@ function gree_protocol.discover_devices()
       end
       
       if response and response.t == "dev" then
-        local device_info = {
-          ip = ip,
-          port = port,
-          mac = response.mac or response.cid,
-          name = response.name,
-          brand = response.brand,
-          model = response.model,
-          version = response.ver,
-          cid = response.cid,
-          subCnt = response.subCnt or 1
-        }
+        local mac = response.mac or response.cid
         
-        log.info("Discovered Gree device: " .. (device_info.name or "Unknown") .. " (" .. device_info.mac .. ") at " .. ip)
-        table.insert(discovered_devices, device_info)
-        
-        -- Store for later use
-        devices[device_info.mac] = device_info
+        -- Skip if we've already seen this MAC address
+        if not seen_macs[mac] then
+          local device_info = {
+            ip = ip,
+            port = port,
+            mac = mac,
+            name = response.name,
+            brand = response.brand,
+            model = response.model,
+            version = response.ver,
+            cid = response.cid,
+            subCnt = response.subCnt or 1
+          }
+          
+          log.info("Discovered Gree device: " .. (device_info.name or "Unknown") .. " (" .. device_info.mac .. ") at " .. ip)
+          table.insert(discovered_devices, device_info)
+          seen_macs[mac] = true
+          
+          -- Store for later use
+          devices[device_info.mac] = device_info
+        else
+          log.debug("Duplicate response from " .. mac .. ", ignoring")
+        end
       end
     end
   end
   
   udp:close()
-  log.info("Discovery complete. Found " .. #discovered_devices .. " device(s)")
+  log.info("Discovery complete. Found " .. #discovered_devices .. " unique device(s)")
   
   return discovered_devices
 end
@@ -474,6 +497,82 @@ function gree_protocol.query_status(device_ip, device_mac, encryption_key, param
   return status_data
 end
 
+-- MultiGet: Query all sub-units at once (for multi-split systems)
+function gree_protocol.multiget_status(device_ip, device_mac, encryption_key, params_to_query)
+  log.info("MultiGet query for device: " .. device_mac)
+  
+  local udp = create_udp_socket()
+  if not udp then
+    return nil, "Failed to create socket"
+  end
+  
+  -- Default parameters to query
+  params_to_query = params_to_query or {"Pow", "Mod", "SetTem", "WdSpd", "TemUn", "TemSen"}
+  
+  -- Create multiget query
+  local query = {
+    cols = params_to_query,
+    mac = device_mac,
+    t = "multiget"
+  }
+  
+  local query_json = json.encode(query)
+  log.debug("MultiGet query payload: " .. query_json)
+  
+  -- Encrypt query
+  local encrypted = crypto.encrypt(query_json, encryption_key)
+  
+  -- Create message
+  local message = {
+    cid = "app",
+    i = 0,
+    t = "pack",
+    uid = 0,
+    tcid = device_mac,
+    pack = encrypted
+  }
+  
+  local msg_json = json.encode(message)
+  log.debug("Sending multiget query")
+  
+  -- Send query
+  local ok, err = udp:sendto(msg_json, device_ip, gree_protocol.DEVICE_PORT)
+  if not ok then
+    log.error("Failed to send multiget query: " .. tostring(err))
+    udp:close()
+    return nil, "Send failed"
+  end
+  
+  log.debug("Waiting for multiget response (timeout: " .. gree_protocol.COMMAND_TIMEOUT .. "s)...")
+  
+  -- Wait for response
+  local data, resp_ip, resp_port = udp:receivefrom()
+  
+  if not data then
+    log.error("No multiget response received")
+    udp:close()
+    return nil, "No response"
+  end
+  
+  log.debug("Received multiget response from " .. tostring(resp_ip) .. ":" .. tostring(resp_port))
+  udp:close()
+  
+  log.debug("MultiGet response data: " .. data)
+  
+  local response = json.decode(data)
+  if not response or not response.pack then
+    log.error("Invalid multiget response")
+    return nil, "Invalid response"
+  end
+  
+  -- Decrypt response
+  local decrypted = crypto.decrypt(response.pack, encryption_key)
+  log.debug("Decrypted multiget: " .. decrypted)
+  
+  local multiget_data = json.decode(decrypted)
+  return multiget_data
+end
+
 -- Smart refresh: Use command-based query for sub-units (status queries don't work)
 -- This sends a "read" command that returns current state in val array
 function gree_protocol.refresh_status(device_ip, device_mac, encryption_key, sub_unit_mac)
@@ -491,11 +590,15 @@ function gree_protocol.refresh_status(device_ip, device_mac, encryption_key, sub
   local params = {"Pow", "Mod", "SetTem", "WdSpd", "TemUn", "TemSen", "SwUpDn", "Quiet", "Turbo", "Lig"}
   
   -- Create a "query" command - we request current values
-  -- IMPORTANT: Use p=[] with same count as opt[] to query without changing state
-  -- The AC will return actual state in val array, p values are ignored for reads
+  -- IMPORTANT: Provide a positional array (same length as opt[]) so firmware treats this as a read
+  -- Using {} resulted in the unit echoing the previous command instead of returning current state
+  local placeholder_values = {}
+  for _ = 1, #params do
+    table.insert(placeholder_values, 0)
+  end
   local command = {
     opt = params,
-    p = {},  -- Empty array - don't send any values, just query
+    p = placeholder_values,
     t = "cmd"
   }
   

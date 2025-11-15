@@ -6,7 +6,20 @@
 set -e
 
 DRIVER_NAME="gree-driver"
-VERSION="1.0.0"
+
+# Extract version from config.yml name field (format: "Gree AC Driver V1.3.3")
+if [ -f "config.yml" ]; then
+  VERSION=$(grep -E "^name:" config.yml | sed -E "s/.*V([0-9]+\.[0-9]+\.[0-9]+).*/\1/")
+else
+  echo "ERROR: config.yml not found"
+  exit 1
+fi
+
+if [ -z "$VERSION" ]; then
+  echo "ERROR: Could not extract version from config.yml"
+  exit 1
+fi
+
 PACKAGE_FILE="${DRIVER_NAME}-v${VERSION}.tar.gz"
 
 echo "================================================"
@@ -45,9 +58,7 @@ tar -czf "$PACKAGE_FILE" \
   src/ \
   profiles/ \
   config.yml \
-  README.md \
-  CONFIG_TEMPLATE.md \
-  VERSION1.md
+  README.md
 
 echo ""
 echo "================================================"

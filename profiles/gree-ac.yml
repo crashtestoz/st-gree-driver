@@ -8,6 +8,15 @@ components:
     version: 1
   - id: thermostatMode
     version: 1
+    config:
+      thermostatMode:
+        supportedThermostatModes:
+          value:
+            - auto
+            - cool
+            - dry
+            - fan
+            - heat
   - id: refresh
     version: 1
   categories:

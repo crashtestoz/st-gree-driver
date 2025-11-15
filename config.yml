@@ -1,5 +1,5 @@
-name: 'Gree AC Driver V1.0.29'
-packageKey: 'gree.v1.0.29'
+name: 'Gree AC Driver V1.3.6'
+packageKey: 'gree.v1.3.6'
 permissions:
   lan: {}
   discovery: {}

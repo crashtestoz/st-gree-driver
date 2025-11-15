@@ -2,12 +2,22 @@
 
 A Samsung SmartThings Edge driver for Gree air conditioners using the ME31-00/C7 WiFi dongle module.
 
+## ⚠️ Important Limitation for Multi-Split Systems
+
+**STATUS POLLING NOT SUPPORTED**: Multi-split sub-units cannot be polled for status via local protocol. This means:
+- ✅ **Control via SmartThings works perfectly**
+- ❌ **Changes via Gree app or remote control are NOT detected**
+- **Why**: Gree app uses cloud servers; SmartThings uses local UDP (no cloud, better privacy)
+- **Recommendation**: Control ONLY via SmartThings for accurate status
+
+See [Multi-Split Limitations](docs/MULTI_SPLIT_LIMITATIONS.md) for detailed explanation and cloud vs local architecture.
+
 ## Features
 - **Local control** without cloud dependencies
 - **Auto-discovery** of Gree AC units on local network  
 - **Auto-configuration** - IP, MAC, and encryption key detected automatically
 - **Multi-split support** - Control multiple AC units independently
-- **Version 1.0**: Basic ON/OFF control with Mode and Temperature display
+- **Version 1.3**: Full ON/OFF, temperature, and mode control
 
 ## Supported Devices
 - Gree / Sealy International / Breamar air conditioners with ME31-00/C7 WiFi module
