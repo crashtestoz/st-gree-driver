@@ -81,10 +81,10 @@ Most settings are **auto-configured**:
 - Adjusting polling interval (optional)
 - Temperature display units (optional)
 
-## Version 1.0 Features
+## Version 1 Features
 - ✅ Power ON/OFF control
+- ✅ Set & Display Thermostat Temperature
 - ✅ Display current Mode (Auto, Cool, Dry, Fan, Heat)
-- ✅ Display set temperature and current temperature
 - ✅ Multi-split system support with individual unit control
 
 ## Planned Features (Future Versions)
