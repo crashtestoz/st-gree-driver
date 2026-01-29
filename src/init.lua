@@ -1,6 +1,6 @@
--- SmartThings Gree Air Conditioner Driver - Version 1.3.6
+-- SmartThings Gree Air Conditioner Driver - Version 1.3.11
 -- Copyright (c) 2025
--- Features: ON/OFF control, Temperature setpoint control, Mode control (auto/cool/dry/fan/heat)
+-- Features: ON/OFF control, Temperature setpoint control, Mode control (auto/cool/dry/fan/heat), Fan mode, Display light
 -- Fixed: Prevents duplicate device creation during discovery
 -- Multi-split support with smart refresh (command-based status queries)
 -- Auto-configuration: IP, MAC, and encryption key auto-detected
@@ -16,8 +16,8 @@ local device_handler = require "device_handler"
 
 -- Driver initialization
 local function driver_init(driver)
-  log.info("Starting Gree AC driver - Version 1.3.6 - Mode control with explicit supported modes")
-  log.info("Features: ON/OFF control, Temperature setpoint control, Mode control (auto/cool/dry/fan/heat), Manual refresh")
+  log.info("Starting Gree AC driver - Version 1.3.11 - Fan mode with Auto/Low/Medium/High")
+  log.info("Features: ON/OFF, Temperature, Mode, Fan mode, Display light")
   log.info("Multi-split: Auto-creates sub-unit devices, requires sub_mac configuration in settings")
   log.info("See README for multi-split configuration instructions")
 end
@@ -33,18 +33,22 @@ local driver_config = {
     removed = device_handler.device_removed
   },
   capability_handlers = {
-    -- Switch ON/OFF control
+    -- Switch ON/OFF control (main component - AC power)
     [capabilities.switch.ID] = {
       [capabilities.switch.commands.on.NAME] = device_handler.switch_on,
       [capabilities.switch.commands.off.NAME] = device_handler.switch_off
     },
-    -- Temperature setpoint control (v1.1.1)
+    -- Temperature setpoint control
     [capabilities.thermostatCoolingSetpoint.ID] = {
       [capabilities.thermostatCoolingSetpoint.commands.setCoolingSetpoint.NAME] = device_handler.set_cooling_setpoint
     },
-    -- Thermostat mode control (v1.3.4)
+    -- Thermostat mode control
     [capabilities.thermostatMode.ID] = {
       [capabilities.thermostatMode.commands.setThermostatMode.NAME] = device_handler.set_thermostat_mode
+    },
+    -- Fan mode control (airConditionerFanMode with auto/low/medium/high)
+    [capabilities.airConditionerFanMode.ID] = {
+      [capabilities.airConditionerFanMode.commands.setFanMode.NAME] = device_handler.set_fan_mode
     },
     -- Manual status refresh
     [capabilities.refresh.ID] = {
@@ -55,5 +59,5 @@ local driver_config = {
 
 -- Create and run the driver
 local driver = Driver("gree-ac-driver", driver_config)
-  log.info("Starting Gree AC driver - Auto-create sub-unit devices")
+log.info("Starting Gree AC driver - Auto-create sub-unit devices")
 driver:run()

@@ -1,5 +1,5 @@
 -- SmartThings Gree AC Device Handler
--- Version 1.3.6 - Fixed: Explicitly emit supportedThermostatModes to restrict UI options
+-- Version 1.3.11 - airConditionerFanMode for proper Auto/Low/Medium/High labels
 -- Command-based state tracking for multi-split sub-units
 
 local capabilities = require "st.capabilities"
@@ -15,8 +15,8 @@ local device_states = {}
 local MODE_MAP = {
   [0] = "auto",
   [1] = "cool",
-  [2] = "dry",
-  [3] = "fan",
+  [2] = "dryair",
+  [3] = "fanonly",
   [4] = "heat"
 }
 
@@ -24,9 +24,29 @@ local MODE_MAP = {
 local REVERSE_MODE_MAP = {
   auto = 0,
   cool = 1,
-  dry = 2,
-  fan = 3,
+  dryair = 2,
+  fanonly = 3,
   heat = 4
+}
+
+-- Fan mode mapping: Gree WdSpd -> SmartThings airConditionerFanMode
+-- Gree: 0=auto, 1=low, 2=med-low, 3=medium, 4=med-high, 5=high
+-- SmartThings: auto, low, medium, high
+local FAN_MODE_MAP = {
+  [0] = "auto",
+  [1] = "low",
+  [2] = "low",
+  [3] = "medium",
+  [4] = "high",
+  [5] = "high"
+}
+
+-- Reverse fan mode map: SmartThings -> Gree
+local REVERSE_FAN_MODE_MAP = {
+  auto = 0,
+  low = 1,
+  medium = 3,
+  high = 5
 }
 
 -- Helper: Get device preferences
@@ -94,6 +114,47 @@ end
 -- Helper: Get device state
 local function get_device_state(device)
   return device:get_field("device_state") or device_states[device.id] or {}
+end
+
+-- Helper: Emit all UI states from a state table
+-- This updates fan speed, display light, mode, and temperature from command responses
+local function emit_all_states(device, state)
+  if not state then return end
+  
+  -- Power state
+  if state.Pow ~= nil then
+    if state.Pow == 1 then
+      device:emit_event(capabilities.switch.switch.on())
+    else
+      device:emit_event(capabilities.switch.switch.off())
+    end
+  end
+  
+  -- Mode
+  if state.Mod ~= nil then
+    local mode = MODE_MAP[state.Mod] or "auto"
+    device:emit_event(capabilities.thermostatMode.thermostatMode(mode))
+    device:emit_event(capabilities.thermostatMode.supportedThermostatModes({"auto", "cool", "dryair", "fanonly", "heat"}))
+  end
+  
+  -- Set temperature
+  if state.SetTem ~= nil and state.SetTem > 0 then
+    local unit = (state.TemUn == 1) and "F" or "C"
+    device:emit_event(capabilities.thermostatCoolingSetpoint.coolingSetpoint({
+      value = state.SetTem,
+      unit = unit
+    }))
+  end
+  
+  -- Fan mode (using airConditionerFanMode for auto/low/medium/high labels)
+  if state.WdSpd ~= nil then
+    local fan_mode = FAN_MODE_MAP[state.WdSpd] or "auto"
+    pcall(function()
+      device:emit_event(capabilities.airConditionerFanMode.fanMode(fan_mode))
+      device:emit_event(capabilities.airConditionerFanMode.supportedAcFanModes({"auto", "low", "medium", "high"}))
+    end)
+    log.info("Fan mode updated: Gree WdSpd=" .. state.WdSpd .. " -> ST fanMode=" .. fan_mode)
+  end
 end
 
 -- Initialize device on addition
@@ -164,8 +225,17 @@ function device_handler.device_added(driver, device)
   -- Set initial values (only capabilities we can reliably update)
   device:emit_event(capabilities.switch.switch.off())
   device:emit_event(capabilities.thermostatMode.thermostatMode.auto())
-  device:emit_event(capabilities.thermostatMode.supportedThermostatModes({"auto", "cool", "dry", "fan", "heat"}))
-  device:emit_event(capabilities.thermostatCoolingSetpoint.coolingSetpoint({value = 24, unit = "C"}))
+  device:emit_event(capabilities.thermostatMode.supportedThermostatModes({"auto", "cool", "dryair", "fanonly", "heat"}))
+  device:emit_event(capabilities.thermostatCoolingSetpoint.coolingSetpoint({value = 25, unit = "C"}))
+  
+  -- Set fan mode initial state (may not exist on older profiles)
+  local ok, err = pcall(function()
+    device:emit_event(capabilities.airConditionerFanMode.fanMode("auto"))
+    device:emit_event(capabilities.airConditionerFanMode.supportedAcFanModes({"auto", "low", "medium", "high"}))
+  end)
+  if not ok then
+    log.warn("Fan mode capability not available on this device profile")
+  end
   
   -- Start polling with empty p[] array to avoid changing AC state
   device.thread:call_on_schedule(
@@ -182,6 +252,16 @@ end
 -- Initialize device on driver start
 function device_handler.device_init(driver, device)
   log.info("Initializing device: " .. device.label)
+  
+  -- Try to update device profile to latest version (enables new capabilities)
+  local ok, err = pcall(function()
+    device:try_update_metadata({profile = "gree-ac"})
+  end)
+  if ok then
+    log.info("Device profile update requested")
+  else
+    log.debug("Profile update not needed or not supported: " .. tostring(err))
+  end
   
   local config = get_device_config(device)
   
@@ -207,6 +287,38 @@ function device_handler.device_init(driver, device)
       log.warn("Bind failed: " .. tostring(err))
     end
   end
+  
+  -- Emit supported modes to ensure UI shows only valid options
+  device:emit_event(capabilities.thermostatMode.supportedThermostatModes({"auto", "cool", "dryair", "fanonly", "heat"}))
+  log.info("Emitted supportedThermostatModes: auto, cool, dryair, fanonly, heat")
+  
+  -- Emit initial states for all capabilities to enable controls (not grayed out)
+  -- These defaults will be overwritten by actual values from polling or commands
+  local last_state = get_device_state(device) or {}
+  
+  -- Power state
+  if last_state.Pow == 1 then
+    device:emit_event(capabilities.switch.switch.on())
+  else
+    device:emit_event(capabilities.switch.switch.off())
+  end
+  
+  -- Mode
+  local mode = MODE_MAP[last_state.Mod or 0] or "auto"
+  device:emit_event(capabilities.thermostatMode.thermostatMode(mode))
+  
+  -- Temperature setpoint
+  local temp = last_state.SetTem or 25
+  device:emit_event(capabilities.thermostatCoolingSetpoint.coolingSetpoint({value = temp, unit = "C"}))
+  
+  -- Fan mode (protected for profile compatibility)
+  local fan_mode = FAN_MODE_MAP[last_state.WdSpd or 0] or "auto"
+  pcall(function()
+    device:emit_event(capabilities.airConditionerFanMode.fanMode(fan_mode))
+    device:emit_event(capabilities.airConditionerFanMode.supportedAcFanModes({"auto", "low", "medium", "high"}))
+  end)
+  
+  log.info("Emitted initial capability states")
   
   -- Start status polling
   device_handler.poll_device(driver, device)
@@ -284,7 +396,7 @@ function device_handler.poll_device(driver, device)
   else
     -- Query status for main unit (traditional status query works here)
     log.debug("Using traditional status query for main unit")
-    local params_to_query = {"Pow", "Mod", "SetTem", "WdSpd", "TemUn", "TemSen"}
+    local params_to_query = {"Pow", "Mod", "SetTem", "WdSpd", "Lig", "TemUn", "TemSen"}
     status, err = gree_protocol.query_status(config.ip, config.mac, config.key, params_to_query, nil)
   end
   
@@ -311,6 +423,8 @@ function device_handler.poll_device(driver, device)
   if status.Mod ~= nil then
     local mode = MODE_MAP[status.Mod] or "auto"
     device:emit_event(capabilities.thermostatMode.thermostatMode(mode))
+    -- Always emit supported modes to ensure UI shows only valid options
+    device:emit_event(capabilities.thermostatMode.supportedThermostatModes({"auto", "cool", "dryair", "fanonly", "heat"}))
   end
   
   -- Set temperature
@@ -334,6 +448,15 @@ function device_handler.poll_device(driver, device)
         unit = unit
       }))
     end
+  end
+  
+  -- Fan mode (protected for older profiles)
+  if status.WdSpd ~= nil then
+    local st_fan_mode = FAN_MODE_MAP[status.WdSpd] or "auto"
+    pcall(function()
+      device:emit_event(capabilities.airConditionerFanMode.fanMode(st_fan_mode))
+      device:emit_event(capabilities.airConditionerFanMode.supportedAcFanModes({"auto", "low", "medium", "high"}))
+    end)
   end
   
   log.debug("Status update complete")
@@ -367,17 +490,20 @@ function device_handler.set_thermostat_mode(driver, device, command)
   local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
   
   if result then
-    device:emit_event(capabilities.thermostatMode.thermostatMode(command.args.mode))
     log.info("Mode set to: " .. command.args.mode .. " (Gree value: " .. gree_mode .. ")")
     
-    -- Update stored state from command response
+    -- Update stored state and emit ALL UI states
     if result.val and result.opt then
       local state_update = get_device_state(device) or {}
       for i, opt_name in ipairs(result.opt) do
         state_update[opt_name] = result.val[i]
       end
       store_device_state(device, state_update)
-      log.debug("Updated device state from command response")
+      emit_all_states(device, state_update)
+      log.info("Updated all UI states from command response")
+    else
+      device:emit_event(capabilities.thermostatMode.thermostatMode(command.args.mode))
+      device:emit_event(capabilities.thermostatMode.supportedThermostatModes({"auto", "cool", "dryair", "fanonly", "heat"}))
     end
   else
     log.error("Failed to set mode: " .. tostring(err))
@@ -397,26 +523,46 @@ function device_handler.switch_on(driver, device, command)
   
   -- Build command - only send Pow parameter
   -- Some AC models reject commands with multiple parameters during power changes
+  -- Send command with ALL parameters we want to read back
+  -- The response will include val[] for all opts[] we send
+  -- This allows us to sync temperature, fan mode, display light on power on
   local params = {
-    Pow = 1
+    Pow = 1,
+    SetTem = nil,  -- nil means "read current value"
+    Mod = nil,
+    WdSpd = nil,
+    Lig = nil
   }
   
-  -- Send command
-  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
+  -- Actually, Gree protocol requires explicit values. Let's send Pow and query the rest.
+  -- We'll use a two-step approach: send Pow=1, then query status
+  local result, err = gree_protocol.send_command(config.ip, config.mac, {Pow = 1}, config.key, config.sub_mac)
   
   if result then
-    device:emit_event(capabilities.switch.switch.on())
     log.info("Device turned ON")
+    device:emit_event(capabilities.switch.switch.on())
     
-    -- Update stored state from command response
-    -- For sub-units, this is the ONLY source of state information
-    if result.val and result.opt then
-      local state_update = get_device_state(device) or {}
-      for i, opt_name in ipairs(result.opt) do
-        state_update[opt_name] = result.val[i]
+    -- Now send a "read" command to get all current values
+    -- We do this by sending current known values (or defaults) and reading back
+    local current_state = get_device_state(device) or {}
+    local read_params = {
+      Pow = 1,
+      SetTem = current_state.SetTem or 25,
+      Mod = current_state.Mod or 1,
+      WdSpd = current_state.WdSpd or 0,
+      Lig = current_state.Lig or 1
+    }
+    
+    local read_result, read_err = gree_protocol.send_command(config.ip, config.mac, read_params, config.key, config.sub_mac)
+    
+    if read_result and read_result.val and read_result.opt then
+      local state_update = {}
+      for i, opt_name in ipairs(read_result.opt) do
+        state_update[opt_name] = read_result.val[i]
       end
       store_device_state(device, state_update)
-      log.debug("Updated device state from command response")
+      emit_all_states(device, state_update)
+      log.info("Synced all UI states after power on")
     end
   else
     log.error("Failed to turn ON: " .. tostring(err))
@@ -444,18 +590,22 @@ function device_handler.switch_off(driver, device, command)
   local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
   
   if result then
-    device:emit_event(capabilities.switch.switch.off())
     log.info("Device turned OFF")
     
     -- Update stored state from command response
-    -- For sub-units, this is the ONLY source of state information
     if result.val and result.opt then
       local state_update = get_device_state(device) or {}
       for i, opt_name in ipairs(result.opt) do
         state_update[opt_name] = result.val[i]
       end
       store_device_state(device, state_update)
-      log.debug("Updated device state from command response")
+      
+      -- Emit ALL UI states from command response
+      emit_all_states(device, state_update)
+      log.info("Updated all UI states from command response")
+    else
+      -- Fallback: just emit power off
+      device:emit_event(capabilities.switch.switch.off())
     end
   else
     log.error("Failed to turn OFF: " .. tostring(err))
@@ -475,18 +625,10 @@ function device_handler.refresh(driver, device, command)
     log.warn("Changes via Gree app or remote control are NOT detected")
     log.warn("For accurate status, control ONLY via SmartThings")
     
-    -- Re-emit last known state from command responses
-    local last_state = get_device_state(device)
-    if last_state and last_state.Pow ~= nil then
-      if last_state.Pow == 1 then
-        device:emit_event(capabilities.switch.switch.on())
-      else
-        device:emit_event(capabilities.switch.switch.off())
-      end
-      log.info("Re-emitted last known state: Pow=" .. tostring(last_state.Pow))
-    else
-      log.warn("No cached state available - send a command first")
-    end
+    -- Re-emit last known state from command responses (or defaults)
+    local last_state = get_device_state(device) or {}
+    emit_all_states(device, last_state)
+    log.info("Re-emitted all states for sub-unit")
     return
   end
   
@@ -537,21 +679,71 @@ function device_handler.set_cooling_setpoint(driver, device, command)
   local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
   
   if result then
-    device:emit_event(capabilities.thermostatCoolingSetpoint.coolingSetpoint({value = target_temp, unit = "C"}))
     log.info("Cooling setpoint set to " .. target_temp .. "°C")
     
-    -- Update stored state from command response
-    -- For sub-units, this is the ONLY source of state information
+    -- Update stored state and emit ALL UI states
     if result.val and result.opt then
       local state_update = get_device_state(device) or {}
       for i, opt_name in ipairs(result.opt) do
         state_update[opt_name] = result.val[i]
       end
       store_device_state(device, state_update)
-      log.debug("Updated device state from command response")
+      emit_all_states(device, state_update)
+      log.info("Updated all UI states from command response")
+    else
+      device:emit_event(capabilities.thermostatCoolingSetpoint.coolingSetpoint({value = target_temp, unit = "C"}))
     end
   else
     log.error("Failed to set temperature: " .. tostring(err))
+  end
+end
+
+-- Set fan mode command (airConditionerFanMode: auto/low/medium/high)
+function device_handler.set_fan_mode(driver, device, command)
+  local fan_mode = command.args.fanMode
+  log.info("Setting fan mode to " .. tostring(fan_mode) .. " for: " .. device.label)
+  
+  local config = get_device_config(device)
+  
+  if not config.ip or not config.mac or not config.key then
+    log.error("Device not configured")
+    return
+  end
+  
+  -- Convert SmartThings fan mode to Gree WdSpd value
+  local gree_speed = REVERSE_FAN_MODE_MAP[fan_mode]
+  if not gree_speed then
+    log.error("Invalid fan mode: " .. tostring(fan_mode))
+    return
+  end
+  
+  log.info("Sending WdSpd command with value: " .. gree_speed)
+  
+  -- Build command
+  local params = {
+    WdSpd = gree_speed
+  }
+  
+  -- Send command
+  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
+  
+  if result then
+    log.info("Fan mode set to " .. fan_mode .. " (Gree WdSpd: " .. gree_speed .. ")")
+    
+    -- Update stored state and emit ALL UI states
+    if result.val and result.opt then
+      local state_update = get_device_state(device) or {}
+      for i, opt_name in ipairs(result.opt) do
+        state_update[opt_name] = result.val[i]
+      end
+      store_device_state(device, state_update)
+      emit_all_states(device, state_update)
+      log.info("Updated all UI states from command response")
+    else
+      device:emit_event(capabilities.airConditionerFanMode.fanMode(fan_mode))
+    end
+  else
+    log.error("Failed to set fan mode: " .. tostring(err))
   end
 end
 

@@ -14,9 +14,11 @@ components:
           value:
             - auto
             - cool
-            - dry
-            - fan
+            - dryair
+            - fanonly
             - heat
+  - id: airConditionerFanMode
+    version: 1
   - id: refresh
     version: 1
   categories:
