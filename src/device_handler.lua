@@ -1,5 +1,5 @@
 -- SmartThings Gree AC Device Handler
--- Version 1.3.11 - airConditionerFanMode for proper Auto/Low/Medium/High labels
+-- Version 1.3.12 - airConditionerFanMode for proper Auto/Low/Medium/High labels
 -- Command-based state tracking for multi-split sub-units
 
 local capabilities = require "st.capabilities"
@@ -49,6 +49,44 @@ local REVERSE_FAN_MODE_MAP = {
   high = 5
 }
 
+local function normalize_cipher_type(cipher_type)
+  if not cipher_type or cipher_type == "" then
+    return gree_protocol.CIPHER_AUTO
+  end
+
+  local normalized = tostring(cipher_type):lower()
+  if normalized == gree_protocol.CIPHER_GCM then
+    return gree_protocol.CIPHER_GCM
+  end
+  if normalized == gree_protocol.CIPHER_ECB then
+    return gree_protocol.CIPHER_ECB
+  end
+  return gree_protocol.CIPHER_AUTO
+end
+
+local function resolve_cipher_type(device)
+  local stored_cipher = device:get_field("cipher_type") or device:get_field("discovered_cipher_type")
+  if stored_cipher and stored_cipher ~= "" then
+    return normalize_cipher_type(stored_cipher)
+  end
+
+  local preference = device.preferences.cipherType
+  if preference and preference ~= "" then
+    return normalize_cipher_type(preference)
+  end
+
+  return gree_protocol.CIPHER_AUTO
+end
+
+local function store_cipher_type(device, cipher_type)
+  local normalized = normalize_cipher_type(cipher_type)
+  if normalized == gree_protocol.CIPHER_AUTO then
+    return
+  end
+
+  device:set_field("cipher_type", normalized, {persist = true})
+end
+
 -- Helper: Get device preferences
 local function get_device_config(device)
   -- Priority: 1) Discovered data (auto-configured), 2) User preferences (manual override)
@@ -87,11 +125,15 @@ local function get_device_config(device)
   
   -- Get encryption key - priority: 1) From bind (stored field), 2) User preference, 3) Generic key
   local key = device:get_field("encryption_key") -- From successful bind
+  local has_key = false
   if key and key ~= "" then
     log.debug("Using encryption key from bind: " .. key)
+    has_key = true
   else
     key = get_value(nil, "encryptionKey") -- From user preference
-    if not key or key == "" then
+    if key and key ~= "" then
+      has_key = true
+    else
       log.debug("No encryption key configured, using generic key")
       key = gree_protocol.GENERIC_KEY
     end
@@ -101,7 +143,9 @@ local function get_device_config(device)
     ip = get_value("discovered_ip", "deviceIp"),
     mac = get_value("discovered_mac", "deviceMac"),
     key = key,
-    sub_mac = sub_mac
+    has_key = has_key,
+    sub_mac = sub_mac,
+    cipher_type = resolve_cipher_type(device)
   }
 end
 
@@ -202,6 +246,10 @@ function device_handler.device_added(driver, device)
     -- Save discovered info to device fields (these will be used by get_device_config)
     device:set_field("discovered_ip", cached_info.ip, {persist = true})
     device:set_field("discovered_mac", cached_info.mac, {persist = true})
+    if cached_info.cipher_type then
+      device:set_field("discovered_cipher_type", cached_info.cipher_type, {persist = true})
+      store_cipher_type(device, cached_info.cipher_type)
+    end
     log.info("Stored discovered IP and MAC to device fields")
     
     if cached_info.sub_index then
@@ -277,12 +325,13 @@ function device_handler.device_init(driver, device)
   end
   
   -- If we have config, try to bind (or verify existing binding)
-  if config.ip and config.mac and not config.key then
+  if config.ip and config.mac and not config.has_key then
     log.info("Attempting to bind with device...")
-    local key, err = gree_protocol.bind_device(config.ip, config.mac)
+    local key, err, cipher_type = gree_protocol.bind_device(config.ip, config.mac, config.cipher_type)
     if key then
       log.info("Bind successful, saving encryption key")
       device:set_field("encryption_key", key, {persist = true})
+      store_cipher_type(device, cipher_type or config.cipher_type)
     else
       log.warn("Bind failed: " .. tostring(err))
     end
@@ -338,17 +387,61 @@ local function attempt_bind(device, config)
   end
   
   log.info("Attempting to bind with device at " .. config.ip)
-  local key, err = gree_protocol.bind_device(config.ip, config.mac)
+  local preferred_cipher = config.cipher_type or gree_protocol.CIPHER_AUTO
+  local attempted = {}
+  local key, err, bound_cipher
+
+  local function try_bind(cipher_type)
+    if attempted[cipher_type] then
+      return false
+    end
+
+    attempted[cipher_type] = true
+    log.info("Trying bind with cipher: " .. tostring(cipher_type))
+    key, err, bound_cipher = gree_protocol.bind_device(config.ip, config.mac, cipher_type)
+    return key ~= nil
+  end
+
+  if preferred_cipher == gree_protocol.CIPHER_AUTO then
+    try_bind(gree_protocol.CIPHER_ECB)
+    if not key then
+      try_bind(gree_protocol.CIPHER_GCM)
+    end
+  else
+    try_bind(preferred_cipher)
+    if not key then
+      if preferred_cipher == gree_protocol.CIPHER_ECB then
+        try_bind(gree_protocol.CIPHER_GCM)
+      else
+        try_bind(gree_protocol.CIPHER_ECB)
+      end
+    end
+  end
   
   if key then
     log.info("✓ Bind successful! Encryption key: " .. key)
     device:set_field("encryption_key", key, {persist = true})
+    store_cipher_type(device, bound_cipher or preferred_cipher)
     log.info("Encryption key stored and will be used for all commands")
     return true
   else
     log.error("✗ Bind failed: " .. tostring(err))
     return false
   end
+end
+
+local function ensure_device_key(device, config)
+  if config.has_key then
+    return config
+  end
+
+  log.info("No encryption key found, attempting bind...")
+  if attempt_bind(device, config) then
+    return get_device_config(device)
+  end
+
+  log.error("Cannot continue without encryption key")
+  return nil
 end
 
 -- Poll device status
@@ -361,13 +454,9 @@ function device_handler.poll_device(driver, device)
   end
   
   -- If no encryption key, attempt to bind first
-  if not config.key or config.key == "" then
-    log.info("No encryption key found, attempting bind...")
-    if attempt_bind(device, config) then
-      -- Refresh config after binding
-      config = get_device_config(device)
-    else
-      log.error("Cannot poll without encryption key")
+  if not config.has_key then
+    config = ensure_device_key(device, config)
+    if not config then
       return
     end
   end
@@ -397,7 +486,7 @@ function device_handler.poll_device(driver, device)
     -- Query status for main unit (traditional status query works here)
     log.debug("Using traditional status query for main unit")
     local params_to_query = {"Pow", "Mod", "SetTem", "WdSpd", "Lig", "TemUn", "TemSen"}
-    status, err = gree_protocol.query_status(config.ip, config.mac, config.key, params_to_query, nil)
+    status, err = gree_protocol.query_status(config.ip, config.mac, config.key, params_to_query, nil, config.cipher_type)
   end
   
   if not status then
@@ -472,6 +561,11 @@ function device_handler.set_thermostat_mode(driver, device, command)
     log.error("Device not configured")
     return
   end
+
+  config = ensure_device_key(device, config)
+  if not config then
+    return
+  end
   
   -- Convert SmartThings mode to Gree mode value
   local gree_mode = REVERSE_MODE_MAP[command.args.mode]
@@ -487,7 +581,7 @@ function device_handler.set_thermostat_mode(driver, device, command)
   }
   
   -- Send command
-  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
+  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac, config.cipher_type)
   
   if result then
     log.info("Mode set to: " .. command.args.mode .. " (Gree value: " .. gree_mode .. ")")
@@ -520,6 +614,11 @@ function device_handler.switch_on(driver, device, command)
     log.error("Device not configured")
     return
   end
+
+  config = ensure_device_key(device, config)
+  if not config then
+    return
+  end
   
   -- Build command - only send Pow parameter
   -- Some AC models reject commands with multiple parameters during power changes
@@ -536,7 +635,7 @@ function device_handler.switch_on(driver, device, command)
   
   -- Actually, Gree protocol requires explicit values. Let's send Pow and query the rest.
   -- We'll use a two-step approach: send Pow=1, then query status
-  local result, err = gree_protocol.send_command(config.ip, config.mac, {Pow = 1}, config.key, config.sub_mac)
+  local result, err = gree_protocol.send_command(config.ip, config.mac, {Pow = 1}, config.key, config.sub_mac, config.cipher_type)
   
   if result then
     log.info("Device turned ON")
@@ -553,7 +652,7 @@ function device_handler.switch_on(driver, device, command)
       Lig = current_state.Lig or 1
     }
     
-    local read_result, read_err = gree_protocol.send_command(config.ip, config.mac, read_params, config.key, config.sub_mac)
+    local read_result, read_err = gree_protocol.send_command(config.ip, config.mac, read_params, config.key, config.sub_mac, config.cipher_type)
     
     if read_result and read_result.val and read_result.opt then
       local state_update = {}
@@ -579,6 +678,11 @@ function device_handler.switch_off(driver, device, command)
     log.error("Device not configured")
     return
   end
+
+  config = ensure_device_key(device, config)
+  if not config then
+    return
+  end
   
   -- Build command - only send Pow parameter
   -- Some AC models reject commands with multiple parameters during power changes
@@ -587,7 +691,7 @@ function device_handler.switch_off(driver, device, command)
   }
   
   -- Send command
-  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
+  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac, config.cipher_type)
   
   if result then
     log.info("Device turned OFF")
@@ -654,6 +758,11 @@ function device_handler.set_cooling_setpoint(driver, device, command)
     log.error("Device not configured")
     return
   end
+
+  config = ensure_device_key(device, config)
+  if not config then
+    return
+  end
   
   -- Check if AC is powered on
   local current_switch = device:get_latest_state("main", capabilities.switch.ID, capabilities.switch.switch.NAME)
@@ -676,7 +785,7 @@ function device_handler.set_cooling_setpoint(driver, device, command)
   }
   
   -- Send command
-  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
+  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac, config.cipher_type)
   
   if result then
     log.info("Cooling setpoint set to " .. target_temp .. "°C")
@@ -709,6 +818,11 @@ function device_handler.set_fan_mode(driver, device, command)
     log.error("Device not configured")
     return
   end
+
+  config = ensure_device_key(device, config)
+  if not config then
+    return
+  end
   
   -- Convert SmartThings fan mode to Gree WdSpd value
   local gree_speed = REVERSE_FAN_MODE_MAP[fan_mode]
@@ -725,7 +839,7 @@ function device_handler.set_fan_mode(driver, device, command)
   }
   
   -- Send command
-  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac)
+  local result, err = gree_protocol.send_command(config.ip, config.mac, params, config.key, config.sub_mac, config.cipher_type)
   
   if result then
     log.info("Fan mode set to " .. fan_mode .. " (Gree WdSpd: " .. gree_speed .. ")")

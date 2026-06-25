@@ -28,6 +28,12 @@ end
 
 local gree_protocol = {}
 
+gree_protocol.GENERIC_KEY = crypto.GENERIC_KEY
+gree_protocol.GENERIC_GCM_KEY = crypto.GENERIC_GCM_KEY
+gree_protocol.CIPHER_AUTO = crypto.CIPHER_AUTO
+gree_protocol.CIPHER_ECB = crypto.CIPHER_ECB
+gree_protocol.CIPHER_GCM = crypto.CIPHER_GCM
+
 -- Protocol constants
 gree_protocol.BROADCAST_PORT = 7000
 gree_protocol.DEVICE_PORT = 7000
@@ -56,6 +62,46 @@ gree_protocol.PARAMS = {
 
 -- Device storage (will be persisted in SmartThings device state)
 local devices = {}
+
+local function create_encrypted_request(device_mac, payload, key, cipher_type, request_index)
+  local encrypted = crypto.encrypt_message(payload, key, cipher_type)
+  if not encrypted or not encrypted.pack then
+    return nil
+  end
+
+  local message = {
+    cid = "app",
+    i = request_index or 0,
+    t = "pack",
+    uid = 0,
+    tcid = device_mac,
+    pack = encrypted.pack
+  }
+
+  if encrypted.tag then
+    message.tag = encrypted.tag
+  end
+
+  return message
+end
+
+local function decrypt_response_message(message, key, cipher_type)
+  if not message or not message.pack then
+    return nil
+  end
+
+  local resolved_cipher = crypto.detect_cipher_type(message)
+  if cipher_type and crypto.normalize_cipher_type(cipher_type) ~= crypto.CIPHER_AUTO then
+    resolved_cipher = crypto.normalize_cipher_type(cipher_type)
+  end
+
+  return crypto.decrypt_message(message.pack, message.tag, key, resolved_cipher)
+end
+
+local function send_json_request(udp, message, device_ip)
+  local msg_json = json.encode(message)
+  return udp:sendto(msg_json, device_ip, gree_protocol.DEVICE_PORT), msg_json
+end
 
 -- Create UDP socket for communication
 local function create_udp_socket()
@@ -161,7 +207,9 @@ function gree_protocol.discover_devices()
       -- Handle encrypted pack format
       if response and response.t == "pack" and response.pack then
         log.debug("Decrypting discovery response...")
-        local decrypted = crypto.decrypt(response.pack, gree_protocol.GENERIC_KEY)
+        local detected_cipher = crypto.detect_cipher_type(response)
+        local discovery_key = detected_cipher == gree_protocol.CIPHER_GCM and gree_protocol.GENERIC_GCM_KEY or gree_protocol.GENERIC_KEY
+        local decrypted = decrypt_response_message(response, discovery_key, detected_cipher)
         if decrypted then
           response = json.decode(decrypted)
           log.trace("Decrypted response: " .. decrypted)
@@ -181,8 +229,10 @@ function gree_protocol.discover_devices()
             brand = response.brand,
             model = response.model,
             version = response.ver,
+            commProtVer = response.commProtVer,
             cid = response.cid,
-            subCnt = response.subCnt or 1
+            subCnt = response.subCnt or 1,
+            cipher_type = crypto.detect_cipher_type(response, response.commProtVer or response.ver)
           }
           
           log.info("Discovered Gree device: " .. (device_info.name or "Unknown") .. " (" .. device_info.mac .. ") at " .. ip)
@@ -205,7 +255,7 @@ function gree_protocol.discover_devices()
 end
 
 -- Bind with device to get encryption key
-function gree_protocol.bind_device(device_ip, device_mac)
+function gree_protocol.bind_device(device_ip, device_mac, cipher_type)
   log.info("Binding with device: " .. device_mac .. " at " .. device_ip)
   
   local udp = create_udp_socket()
@@ -223,20 +273,14 @@ function gree_protocol.bind_device(device_ip, device_mac)
   
   log.debug("Bind request payload: " .. bind_json)
   
-  -- Encrypt with generic key
-  local generic_key = "a3K8Bx%2r8Y7#xDh"
-  local encrypted = crypto.encrypt(bind_json, generic_key)
-  
-  -- Wrap in pack structure
-  local message = {
-    cid = "app",
-    i = 1,
-    t = "pack",
-    uid = 0,
-    tcid = device_mac,
-    pack = encrypted
-  }
-  
+  local resolved_cipher = crypto.normalize_cipher_type(cipher_type)
+  local generic_key = resolved_cipher == gree_protocol.CIPHER_GCM and gree_protocol.GENERIC_GCM_KEY or gree_protocol.GENERIC_KEY
+  local message = create_encrypted_request(device_mac, bind_json, generic_key, resolved_cipher, 1)
+  if not message then
+    udp:close()
+    return nil, "Encryption failed"
+  end
+
   local msg_json = json.encode(message)
   log.debug("Sending encrypted bind request (pack)")
   
@@ -267,7 +311,7 @@ function gree_protocol.bind_device(device_ip, device_mac)
   end
   
   -- Decrypt the pack with generic key
-  local decrypted = crypto.decrypt(message.pack, generic_key)
+  local decrypted = decrypt_response_message(message, generic_key, resolved_cipher)
   if not decrypted then
     log.error("Failed to decrypt bind response")
     return nil, "Decryption failed"
@@ -301,13 +345,14 @@ function gree_protocol.bind_device(device_ip, device_mac)
   -- Store key for this device
   if devices[device_mac] then
     devices[device_mac].key = key
+    devices[device_mac].cipher_type = resolved_cipher
   end
-  
-  return key
+
+  return key, nil, resolved_cipher
 end
 
 -- Send command to device
-function gree_protocol.send_command(device_ip, device_mac, params, encryption_key, sub_unit_mac)
+function gree_protocol.send_command(device_ip, device_mac, params, encryption_key, sub_unit_mac, cipher_type)
   log.info("Sending command to device: " .. device_mac)
   if sub_unit_mac then
     log.info("Sub-unit MAC: " .. sub_unit_mac)
@@ -342,19 +387,12 @@ function gree_protocol.send_command(device_ip, device_mac, params, encryption_ke
   local command_json = json.encode(command)
   log.debug("Command payload: " .. command_json)
   
-  -- Encrypt command
-  local encrypted = crypto.encrypt(command_json, encryption_key)
-  
-  -- Create message
-  local message = {
-    cid = "app",
-    i = 0,
-    t = "pack",
-    uid = 0,
-    tcid = device_mac,
-    pack = encrypted
-  }
-  
+  local message = create_encrypted_request(device_mac, command_json, encryption_key, cipher_type, 0)
+  if not message then
+    udp:close()
+    return nil, "Encryption failed"
+  end
+
   local msg_json = json.encode(message)
   log.debug("Sending encrypted message: " .. msg_json)
   
@@ -387,9 +425,13 @@ function gree_protocol.send_command(device_ip, device_mac, params, encryption_ke
   local response = json.decode(data)
   if response and response.pack then
     -- Decrypt response
-    local decrypted = crypto.decrypt(response.pack, encryption_key)
+    local decrypted = decrypt_response_message(response, encryption_key, cipher_type)
     log.debug("Decrypted response: " .. decrypted)
-    
+
+    if not decrypted then
+      return nil, "Decryption failed"
+    end
+
     local resp_data = json.decode(decrypted)
     return resp_data
   end
@@ -398,7 +440,7 @@ function gree_protocol.send_command(device_ip, device_mac, params, encryption_ke
 end
 
 -- Query device status
-function gree_protocol.query_status(device_ip, device_mac, encryption_key, params_to_query, sub_unit_mac)
+function gree_protocol.query_status(device_ip, device_mac, encryption_key, params_to_query, sub_unit_mac, cipher_type)
   log.info("Querying status from device: " .. device_mac)
   if sub_unit_mac then
     log.info("Sub-unit MAC: " .. sub_unit_mac)
@@ -431,19 +473,12 @@ function gree_protocol.query_status(device_ip, device_mac, encryption_key, param
   local query_json = json.encode(query)
   log.debug("Status query payload: " .. query_json)
   
-  -- Encrypt query
-  local encrypted = crypto.encrypt(query_json, encryption_key)
-  
-  -- Create message
-  local message = {
-    cid = "app",
-    i = 0,
-    t = "pack",
-    uid = 0,
-    tcid = device_mac,
-    pack = encrypted
-  }
-  
+  local message = create_encrypted_request(device_mac, query_json, encryption_key, cipher_type, 0)
+  if not message then
+    udp:close()
+    return nil, "Encryption failed"
+  end
+
   local msg_json = json.encode(message)
   log.debug("Sending encrypted status query: " .. msg_json)
   
@@ -480,8 +515,12 @@ function gree_protocol.query_status(device_ip, device_mac, encryption_key, param
   end
   
   -- Decrypt response
-  local decrypted = crypto.decrypt(response.pack, encryption_key)
+  local decrypted = decrypt_response_message(response, encryption_key, cipher_type)
   log.debug("Decrypted status: " .. decrypted)
+
+  if not decrypted then
+    return nil, "Decryption failed"
+  end
   
   local status_data = json.decode(decrypted)
   
@@ -498,7 +537,7 @@ function gree_protocol.query_status(device_ip, device_mac, encryption_key, param
 end
 
 -- MultiGet: Query all sub-units at once (for multi-split systems)
-function gree_protocol.multiget_status(device_ip, device_mac, encryption_key, params_to_query)
+function gree_protocol.multiget_status(device_ip, device_mac, encryption_key, params_to_query, cipher_type)
   log.info("MultiGet query for device: " .. device_mac)
   
   local udp = create_udp_socket()
@@ -519,19 +558,12 @@ function gree_protocol.multiget_status(device_ip, device_mac, encryption_key, pa
   local query_json = json.encode(query)
   log.debug("MultiGet query payload: " .. query_json)
   
-  -- Encrypt query
-  local encrypted = crypto.encrypt(query_json, encryption_key)
-  
-  -- Create message
-  local message = {
-    cid = "app",
-    i = 0,
-    t = "pack",
-    uid = 0,
-    tcid = device_mac,
-    pack = encrypted
-  }
-  
+  local message = create_encrypted_request(device_mac, query_json, encryption_key, cipher_type, 0)
+  if not message then
+    udp:close()
+    return nil, "Encryption failed"
+  end
+
   local msg_json = json.encode(message)
   log.debug("Sending multiget query")
   
@@ -566,8 +598,12 @@ function gree_protocol.multiget_status(device_ip, device_mac, encryption_key, pa
   end
   
   -- Decrypt response
-  local decrypted = crypto.decrypt(response.pack, encryption_key)
+  local decrypted = decrypt_response_message(response, encryption_key, cipher_type)
   log.debug("Decrypted multiget: " .. decrypted)
+
+  if not decrypted then
+    return nil, "Decryption failed"
+  end
   
   local multiget_data = json.decode(decrypted)
   return multiget_data
@@ -575,7 +611,7 @@ end
 
 -- Smart refresh: Use command-based query for sub-units (status queries don't work)
 -- This sends a "read" command that returns current state in val array
-function gree_protocol.refresh_status(device_ip, device_mac, encryption_key, sub_unit_mac)
+function gree_protocol.refresh_status(device_ip, device_mac, encryption_key, sub_unit_mac, cipher_type)
   log.info("Smart refresh for device: " .. device_mac)
   if sub_unit_mac then
     log.info("Sub-unit MAC: " .. sub_unit_mac)
@@ -610,19 +646,12 @@ function gree_protocol.refresh_status(device_ip, device_mac, encryption_key, sub
   local command_json = json.encode(command)
   log.debug("Smart refresh command payload: " .. command_json)
   
-  -- Encrypt command
-  local encrypted = crypto.encrypt(command_json, encryption_key)
-  
-  -- Create message
-  local message = {
-    cid = "app",
-    i = 0,
-    t = "pack",
-    uid = 0,
-    tcid = device_mac,
-    pack = encrypted
-  }
-  
+  local message = create_encrypted_request(device_mac, command_json, encryption_key, cipher_type, 0)
+  if not message then
+    udp:close()
+    return nil, "Encryption failed"
+  end
+
   local msg_json = json.encode(message)
   log.debug("Sending smart refresh command")
   
@@ -647,8 +676,12 @@ function gree_protocol.refresh_status(device_ip, device_mac, encryption_key, sub
   local response = json.decode(data)
   if response and response.pack then
     -- Decrypt response
-    local decrypted = crypto.decrypt(response.pack, encryption_key)
+    local decrypted = decrypt_response_message(response, encryption_key, cipher_type)
     log.debug("Decrypted response: " .. decrypted)
+
+    if not decrypted then
+      return nil, "Decryption failed"
+    end
     
     local resp_data = json.decode(decrypted)
     
@@ -675,6 +708,14 @@ end
 -- Get stored device info
 function gree_protocol.get_device(device_mac)
   return devices[device_mac]
+end
+
+function gree_protocol.get_or_detect_cipher_type(device_mac)
+  local device = devices[device_mac]
+  if device and device.cipher_type then
+    return device.cipher_type
+  end
+  return gree_protocol.CIPHER_AUTO
 end
 
 -- Discovery handler for SmartThings driver

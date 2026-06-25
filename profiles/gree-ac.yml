@@ -48,6 +48,17 @@ preferences:
     definition:
       stringType: text
       default: ""
+  - name: cipherType
+    title: "Encryption Cipher"
+    description: "Usually leave on Auto Detect. Only change for troubleshooting if a device fails to bind or respond."
+    required: false
+    preferenceType: enumeration
+    definition:
+      options:
+        auto: "Auto Detect"
+        ecb: "AES-128-ECB"
+        gcm: "AES-128-GCM"
+      default: auto
   - name: subUnitMac
     title: "Sub-Unit MAC (Multi-split)"
     description: "REQUIRED for multi-split systems. Enter sub-unit MAC address (e.g., a1b2c3d4000000). See README for instructions."

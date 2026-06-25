@@ -38,9 +38,40 @@ local crypto = {}
 
 -- Generic AES key (used before binding)
 crypto.GENERIC_KEY = "a3K8Bx%2r8Y7#xDh"
+crypto.GENERIC_GCM_KEY = "{yxAHAY_Lm6pbC/<"
+crypto.CIPHER_AUTO = "auto"
+crypto.CIPHER_ECB = "ecb"
+crypto.CIPHER_GCM = "gcm"
+crypto.GCM_IV = string.char(0x54, 0x40, 0x78, 0x44, 0x49, 0x67, 0x5a, 0x51, 0x6c, 0x5e, 0x63, 0x13)
+crypto.GCM_AAD = "qualcomm-test"
 
 -- Use pure Lua AES-128-ECB implementation (st.security doesn't support AES-128)
 local aes128 = require "aes128"
+local aes_gcm = require "aes_gcm"
+
+local function normalize_cipher_type(cipher_type)
+  if cipher_type == nil then
+    return crypto.CIPHER_ECB
+  end
+
+  local normalized = tostring(cipher_type):lower()
+  if normalized == crypto.CIPHER_GCM then
+    return crypto.CIPHER_GCM
+  end
+  if normalized == crypto.CIPHER_AUTO then
+    return crypto.CIPHER_AUTO
+  end
+  return crypto.CIPHER_ECB
+end
+
+local function parse_protocol_major(version_hint)
+  if type(version_hint) ~= "string" then
+    return nil
+  end
+
+  local major = version_hint:match("[Vv](%d+)")
+  return tonumber(major)
+end
 
 -- AES ECB encryption using pure Lua implementation
 -- Note: Gree uses AES-128-ECB with PKCS7 padding
@@ -123,40 +154,117 @@ local function aes_decrypt(data, key)
   return decrypted
 end
 
--- Encrypt and encode message for Gree protocol
-function crypto.encrypt(plain_text, key)
-  key = key or crypto.GENERIC_KEY
-  
-  log.debug("Encrypting message with key: " .. key)
-  
-  local encrypted = aes_encrypt(plain_text, key)
-  local encoded = base64.encode(encrypted)
-  
-  log.debug("Encrypted result: " .. encoded)
-  
-  return encoded
+function crypto.normalize_cipher_type(cipher_type)
+  return normalize_cipher_type(cipher_type)
 end
 
--- Decode and decrypt message from Gree protocol
-function crypto.decrypt(encrypted_text, key)
-  key = key or crypto.GENERIC_KEY
-  
-  log.debug("Decrypting message with key: " .. key)
-  
-  local decoded = base64.decode(encrypted_text)
-  log.debug("Base64 decoded length: " .. #decoded)
-  
-  local decrypted = aes_decrypt(decoded, key)
-  
-  if decrypted then
-    log.debug("Decrypted result length: " .. #decrypted)
-    log.trace("Decrypted result: " .. decrypted)
-  else
-    log.error("Decryption returned nil")
+function crypto.detect_cipher_type(message, version_hint)
+  if type(message) == "table" and message.tag and message.tag ~= "" then
+    return crypto.CIPHER_GCM
+  end
+
+  if type(version_hint) == "table" then
+    version_hint = version_hint.commProtVer or version_hint.ver or version_hint.version
+  end
+
+  local major = parse_protocol_major(version_hint)
+  if major and major >= 2 then
+    return crypto.CIPHER_GCM
+  end
+
+  return crypto.CIPHER_ECB
+end
+
+function crypto.encrypt_message(plain_text, key, cipher_type)
+  local mode = normalize_cipher_type(cipher_type)
+
+  if mode == crypto.CIPHER_GCM then
+    local gcm_key = key or crypto.GENERIC_GCM_KEY
+    log.debug("Encrypting message with AES-GCM, key length: " .. #gcm_key)
+
+    local success, encrypted, tag = pcall(aes_gcm.encrypt, plain_text, gcm_key, crypto.GCM_IV, crypto.GCM_AAD)
+    if not success then
+      log.error("AES-GCM encryption failed: " .. tostring(encrypted))
+      return nil
+    end
+
+    return {
+      pack = base64.encode(encrypted),
+      tag = base64.encode(tag)
+    }
+  end
+
+  local ecb_key = key or crypto.GENERIC_KEY
+  log.debug("Encrypting message with AES-128-ECB, key length: " .. #ecb_key)
+
+  local encrypted = aes_encrypt(plain_text, ecb_key)
+  if not encrypted then
     return nil
   end
-  
+
+  return {
+    pack = base64.encode(encrypted)
+  }
+end
+
+function crypto.decrypt_message(encrypted_text, tag, key, cipher_type)
+  local mode = normalize_cipher_type(cipher_type)
+  if mode == crypto.CIPHER_AUTO then
+    mode = (tag and tag ~= "") and crypto.CIPHER_GCM or crypto.CIPHER_ECB
+  end
+
+  if mode == crypto.CIPHER_GCM then
+    local gcm_key = key or crypto.GENERIC_GCM_KEY
+    log.debug("Decrypting message with AES-GCM, key length: " .. #gcm_key)
+
+    if not tag or tag == "" then
+      log.error("AES-GCM response is missing authentication tag")
+      return nil
+    end
+
+    local decoded = base64.decode(encrypted_text)
+    local decoded_tag = base64.decode(tag)
+    local success, decrypted, err = pcall(aes_gcm.decrypt, decoded, decoded_tag, gcm_key, crypto.GCM_IV, crypto.GCM_AAD)
+    if not success then
+      log.error("AES-GCM decryption failed: " .. tostring(decrypted))
+      return nil
+    end
+    if not decrypted then
+      log.error("AES-GCM decryption returned nil: " .. tostring(err))
+      return nil
+    end
+
+    decrypted = decrypted:gsub("\255", "")
+    log.debug("Decrypted GCM result length: " .. #decrypted)
+    return decrypted
+  end
+
+  local ecb_key = key or crypto.GENERIC_KEY
+  log.debug("Decrypting message with AES-128-ECB, key length: " .. #ecb_key)
+
+  local decoded = base64.decode(encrypted_text)
+  log.debug("Base64 decoded length: " .. #decoded)
+
+  local decrypted = aes_decrypt(decoded, ecb_key)
+  if not decrypted then
+    log.error("ECB decryption returned nil")
+    return nil
+  end
+
+  log.debug("Decrypted ECB result length: " .. #decrypted)
+  log.trace("Decrypted ECB result: " .. decrypted)
   return decrypted
+end
+
+-- Backward-compatible ECB wrapper kept for existing call sites.
+function crypto.encrypt(plain_text, key, cipher_type)
+  local encrypted = crypto.encrypt_message(plain_text, key, cipher_type)
+  return encrypted and encrypted.pack or nil
+end
+
+-- Backward-compatible decrypt wrapper kept for existing call sites.
+function crypto.decrypt(encrypted_text, key, cipher_type, tag)
+  return crypto.decrypt_message(encrypted_text, tag, key, cipher_type)
 end
 
 return crypto

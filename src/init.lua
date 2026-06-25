@@ -1,4 +1,4 @@
--- SmartThings Gree Air Conditioner Driver - Version 1.3.11
+-- SmartThings Gree Air Conditioner Driver - Version 1.3.12
 -- Copyright (c) 2025
 -- Features: ON/OFF control, Temperature setpoint control, Mode control (auto/cool/dry/fan/heat), Fan mode, Display light
 -- Fixed: Prevents duplicate device creation during discovery
@@ -16,7 +16,7 @@ local device_handler = require "device_handler"
 
 -- Driver initialization
 local function driver_init(driver)
-  log.info("Starting Gree AC driver - Version 1.3.11 - Fan mode with Auto/Low/Medium/High")
+  log.info("Starting Gree AC driver - Version 1.3.12 - Fan mode with Auto/Low/Medium/High")
   log.info("Features: ON/OFF, Temperature, Mode, Fan mode, Display light")
   log.info("Multi-split: Auto-creates sub-unit devices, requires sub_mac configuration in settings")
   log.info("See README for multi-split configuration instructions")
